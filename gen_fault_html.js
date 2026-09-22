@@ -1,11 +1,11 @@
 /**
- * 黄岛-故障信息分析助手 - HTML 看板生成脚本 v4（电力VI · 苹果风 · 单类型模板）
+ * 黄岛-故障信息分析助手 - HTML 看板生成脚本 v5（统一栅格 · 三类型独立看板）
  * ==========================================
  * 用途：
  *   1. 调用 chat API 获取故障分析原始返回（复用 index.js 的 callChat）
  *   2. 将 接口返回的原始 answer 一字不差地完整展示（不脱敏 / 不修改 / 不删减）
  *   3. 跳闸 / 接地 / 母线接地三套独立模板，**按输入识别出的类型只渲染对应的那一种**
- *   4. 单页全览 + 顶部锚点路由，一页包含所有内容
+ *   4. 跳闸/单线接地/母线多线三套独立模板，统一栅格卡片密度
  *   5. 配色：深蓝电力主题（主色深蓝，仅低压相警示红），苹果简约设计
  *
  * 用法：
@@ -256,14 +256,15 @@ function phaseLabel(s) {
   return m ? m[1].toUpperCase() + '相' : '?';
 }
 
-// ---------------- 三套故障模板 ----------------
+
+// ---------------- 统一栅格看板 v5 ----------------
 
 /**
  * 从 query / 接口返回收集候选线路名（去重；排除母线本体；过滤「否」等非线路值）。
- * @param {string} text 主文本（通常为 query 段）
- * @param {string} [extraText] 附加文本（通常为接口 answer）
- * @param {Record<string, string>} [kv] 已解析键值
- * @param {{ forceScan?: boolean }} [opts] forceScan 为 true 时全文扫描线路名模式
+ * @param {string} text
+ * @param {string} [extraText]
+ * @param {Record<string, string>} [kv]
+ * @param {{ forceScan?: boolean }} [opts]
  * @returns {string[]}
  */
 function collectCandidateLines(text, extraText, kv, opts) {
@@ -283,7 +284,6 @@ function collectCandidateLines(text, extraText, kv, opts) {
     (String(text) + '\n' + String(extraText || '')).match(/接地选线线路名称[：:]\s*([^\n]+)/)?.[1],
   ];
   kvArr.filter(Boolean).forEach((v) => String(v).split(/[\r\n，,、;；\s]+/).forEach(push));
-  // 【10kV西营线】一类括号列举
   const bracketRe = /【\s*((?:10|20|35|110)kV[\u4e00-\u9fa5A-Za-z0-9-]*(?:支线|专线|线))\s*】/g;
   [text, extraText].forEach((src) => {
     let bm;
@@ -299,173 +299,248 @@ function collectCandidateLines(text, extraText, kv, opts) {
   return set;
 }
 
-// 模板①：跳闸 —— 事件时间线（保护动作 → 前置接地 → 复归 → 损失）
-function renderTypeTrip(text, kv, escQ) {
-  const device = kv['保护装置'] || '';
-  const actType = kv['动作类型'] || '';
-  const actTime = kv['动作时间'] || '';
-  const actVal = kv['动作值'] || '';
-  const overCurrent = [
-    ['保护装置', device],
-    ['动作类型', actType],
-    ['动作时间', actTime],
-    ['动作值', actVal],
-  ].filter(([, v]) => v);
-
-  const preGround = kv['跳闸前接地情况'] || '';
-  const postGround = kv['跳闸后接地复归情况'] || '';
-  const loss = kv['损失负荷电流'] || '';
-
-  const step = (n, cap, val, opt) => `
-      <div class="tf-step">
-        <div class="tf-line"></div>
-        <div class="tf-dot">${n}</div>
-        <div class="tf-caption">${escQ(cap)}${val ? `<b>${escQ(val)}</b>` : ''}</div>
-        ${opt || ''}
-      </div>`;
-
-  return `
-      <section class="card type-card type-trip" id="type-跳闸">
-        <div class="type-bar"></div>
-        <div class="type-head">
-          <div class="type-title"><h2>跳闸</h2><span class="type-pill">跳闸事件分析</span></div>
-          <div class="type-sub">保护动作 · 跳闸前后状态 · 负荷损失</div>
-        </div>
-
-        <div class="trip-flow">
-          ${step(1, '保护动作', actType || '', '')}
-          ${step(2, '跳闸前接地', preGround || '—')}
-          ${step(3, '跳闸后复归', postGround || '—')}
-          ${step(4, '损失电流', loss || '—')}
-        </div>
-
-        ${overCurrent.length ? `
-        <div class="sub-block">
-          <div class="sub-title">过流动作信息</div>
-          <div class="kv2">
-            ${overCurrent.map(([k, v]) => `<div class="kv2-item"><span>${escQ(k)}</span><b>${escQ(v)}</b></div>`).join('')}
-          </div>
-        </div>` : ''}
-
-        <details class="raw-inline"><summary>该段原始输入</summary><pre>${escQ(text)}</pre></details>
-      </section>`;
+function gCard(title, body, span) {
+  const cls = span ? `g-card span-${span}` : 'g-card';
+  return `<div class="${cls}"><div class="g-card-h">${esc(title)}</div><div class="g-card-b">${body || '<div class="empty">无</div>'}</div></div>`;
 }
 
-// 模板②/③：接地 & 母线接地 —— 三相电压分布 + 定位信息
-function renderTypeVoltage(type, text, kv, escQ, extraText) {
-  const isBus = type === '母线接地';
+function gGrid(cards, extraClass) {
+  const cls = extraClass ? `g-grid ${extraClass}` : 'g-grid';
+  return `<div class="${cls}">${cards.filter(Boolean).join('')}</div>`;
+}
 
-  let ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
-  let ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
-  let uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
+function gSection(id, title, inner) {
+  return `<section class="g-sec" id="${esc(id)}"><div class="g-sec-t">${esc(title)}</div>${inner}</section>`;
+}
 
-  const numOf = (v) => {
-    const m = /([\d.]+)/.exec(String(v));
-    return m ? parseFloat(m[1]) : null;
-  };
-  const phasePct = (v) => {
-    const n = numOf(v);
-    if (n == null) return 3;
-    return Math.max(3, Math.min(100, Math.round((n / 5.8) * 100)));
-  };
+function kvMini(rows) {
+  const items = rows.filter(([, v]) => v && String(v).trim() && v !== '—');
+  if (!items.length) return '<div class="empty">无</div>';
+  return `<div class="kv-mini">${items.map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+}
 
-  const phaseHtml = (label, val) => {
-    const n = numOf(val);
-    // 与定位结论一致：低压相阈值 <2kV
-    const cls = n != null && n < 2 ? 'low' : 'ok';
-    const vcol = cls === 'low' ? '#ff4438' : '#6bb3ff';
-    return `
-      <div class="phase ${cls}">
-        <div class="phase-label">${label}</div>
-        <div class="phase-bar"><div class="phase-fill" style="width:${phasePct(val)}%"></div></div>
-        <div class="phase-val" style="color:${vcol}">${escQ(val || '—')}</div>
-      </div>`;
-  };
+function numOf(v) {
+  const m = /([\d.]+)/.exec(String(v));
+  return m ? parseFloat(m[1]) : null;
+}
 
-  const sel = kv['是否有接地选线']
-    || (text.match(/是否有(接地)?选线[：:]\s*(是|否|有|无)/)?.[0]?.split(/[：:]/)[1]?.trim())
-    || '';
-  const selLine = kv['接地选线线路名称'] || '';
-  const instant = kv['是否瞬时接地'] || '';
+function phasePct(v) {
+  const n = numOf(v);
+  if (n == null) return 3;
+  return Math.max(3, Math.min(100, Math.round((n / 5.8) * 100)));
+}
 
-  // 母线接地：接口返回 / 输入中可能有多个候选线路，尽可能全部收集
-  const busLines = collectCandidateLines(text, extraText, kv, {
-    forceScan: isBus || /是|有/.test(sel),
+function phaseCard(label, val) {
+  const n = numOf(val);
+  const low = n != null && n < 2;
+  return `<div class="phase-mini${low ? ' low' : ''}"><div class="pl">${esc(label)}</div><div class="phase-bar"><div class="phase-fill" style="width:${phasePct(val)}%"></div></div><div class="pv">${esc(val || '—')}</div></div>`;
+}
+
+function getAdviceBlock(answer) {
+  const blocks = parseAnswerBlocks(answer);
+  return blocks.find((b) => b.title === '试拉建议' || b.title.includes('试拉'));
+}
+
+function getSyncBlock(answer) {
+  const blocks = parseAnswerBlocks(answer);
+  return blocks.find((b) => b.title === '信息同步' || b.title.includes('信息同步'));
+}
+
+function adviceCards(answer) {
+  const block = getAdviceBlock(answer);
+  if (!block) return [];
+  const lines = block.lines.map((l) => l.trim()).filter(Boolean);
+  const cards = [];
+  let idx = 0;
+  lines.forEach((t) => {
+    const isHead = !/^\d/.test(t) && /优先|其次|最后|协商|无穿越/.test(t);
+    if (isHead) {
+      cards.push(gCard('试拉策略', `<div class="narr">${esc(t)}</div>`, 12));
+      return;
+    }
+    const m = t.match(/^(\d+)[.、\s]+(.+)$/);
+    idx += 1;
+    const n = m ? m[1] : String(idx);
+    const body = m ? m[2] : t;
+    cards.push(gCard(`优先级 ${n}`, `<div class="adv-row"><span class="adv-n">${esc(n)}</span><span>${esc(body)}</span></div>`));
   });
+  return cards;
+}
 
-  const metaRows = [];
-  if (isBus) {
-    metaRows.push(['厂站名称', kv['厂站名称'] || '']);
-    metaRows.push(['母线名称', kv['母线名称'] || '']);
+function syncCard(answer) {
+  const block = getSyncBlock(answer);
+  const lines = block ? block.lines.map((l) => l.trim()).filter(Boolean) : [];
+  const text = lines.length ? lines.join('\n') : '';
+  return gCard('信息同步', text ? `<div class="narr">${esc(text)}</div>` : '', 12);
+}
+
+function tripDailyCards(query, answer) {
+  const kv = extractKV(query);
+  const steps = [
+    ['保护动作', kv['动作类型'] || '—'],
+    ['跳闸前接地', kv['跳闸前接地情况'] || '—'],
+    ['跳闸后复归', kv['跳闸后接地复归情况'] || '—'],
+    ['损失电流', kv['损失负荷电流'] || '—'],
+  ];
+  const flow = steps.map(([l, v], i) => `<div class="trip-step"><div class="n">${i + 1}</div><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join('');
+  const oc = kvMini([
+    ['保护装置', kv['保护装置'] || ''], ['动作类型', kv['动作类型'] || ''],
+    ['动作时间', kv['动作时间'] || ''], ['动作值', kv['动作值'] || ''],
+  ]);
+  return [
+    gCard('跳闸过程', `<div class="inner-4">${flow}</div>`, 8),
+    gCard('过流动作', oc, 4),
+    syncCard(answer),
+  ];
+}
+
+function groundDailyCards(query, answer, withTrial) {
+  const kv = extractKV(query);
+  const text = String(query || '');
+  const ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
+  const ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
+  const uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
+  const meta = kvMini([
+    ['接地相别', kv['接地相别'] || '—'],
+    ['接地选线', kv['是否有接地选线'] || '—'],
+    ['选线线路', kv['接地选线线路名称'] || '—'],
+    ['瞬时接地', kv['是否瞬时接地'] || '—'],
+  ]);
+  const cards = [
+    gCard('Ua', phaseCard('Ua', ua)),
+    gCard('Ub', phaseCard('Ub', ub)),
+    gCard('Uc', phaseCard('Uc', uc)),
+    gCard('接地信息', meta, 6),
+    syncCard(answer),
+  ];
+  if (withTrial) cards.splice(4, 0, ...adviceCards(answer));
+  return cards;
+}
+
+function busDailyCards(query, answer) {
+  const kv = extractKV(query);
+  const qRaw = String(query || '');
+  const qval = (re) => (qRaw.match(re) || [])[1] || '';
+  const ua = kv['Ua'] || qval(/Ua[：:]\s*([^\s，,；;（(]+)/) || '';
+  const ub = kv['Ub'] || qval(/Ub[：:]\s*([^\s，,；;（(]+)/) || '';
+  const uc = kv['Uc'] || qval(/Uc[：:]\s*([^\s，,；;（(]+)/) || '';
+  const meta = kvMini([
+    ['厂站', kv['厂站名称'] || qval(/厂站名称[：:]\s*(\S+)/) || '—'],
+    ['母线', kv['母线名称'] || qval(/母线名称[：:]\s*(\S+)/) || '—'],
+    ['接地相别', kv['接地相别'] || qval(/接地相别[：:]\s*(\S+)/) || '—'],
+    ['接地选线', kv['是否有接地选线'] || qval(/是否有接地选线[：:]\s*(\S+)/) || '—'],
+    ['选线线路', kv['接地选线线路名称'] || qval(/接地选线线路名称[：:]\s*([^\n]+)/) || '—'],
+    ['瞬时接地', kv['是否瞬时接地'] || qval(/是否瞬时接地[：:]\s*(\S+)/) || '—'],
+  ]);
+  const lineNames = collectCandidateLines(query, answer, kv, { forceScan: true });
+  const lineCards = lineNames.map((l, i) => gCard(`候选 ${i + 1}`, `<div class="line-chip">${esc(l)}</div>`));
+  return [
+    gCard('母线接地', meta, 6),
+    gCard('Ua', phaseCard('Ua', ua)),
+    gCard('Ub', phaseCard('Ub', ub)),
+    gCard('Uc', phaseCard('Uc', uc)),
+    ...lineCards,
+    ...adviceCards(answer),
+    syncCard(answer),
+  ];
+}
+
+function weeklyCards(answer, mainType) {
+  const cards = [];
+  if (mainType === '母线接地') {
+    const blocks = parseAnswerBlocks(answer);
+    const lineBlocks = blocks.filter((b) => /\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(b.title));
+    lineBlocks.forEach((b) => {
+      const items = b.lines.map((l) => l.trim()).filter(Boolean);
+      const md = parseMdTable(items);
+      if (!md) return;
+      const maps = md.rows.map((r) => {
+        const o = {};
+        md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
+        return o;
+      }).filter((r) => md.headers.some((h) => !isBlankCell(r[h])));
+      if (!maps.length || maps.every((r) => md.headers.every((h) => isBlankCell(r[h])))) return;
+      const body = `${weekCaption(maps)}${renderRecordCards(md.headers, maps)}`;
+      cards.push(gCard(`周报 · ${b.title}`, body, 4));
+    });
+    if (!cards.length) cards.push(gCard('历史故障', '<div class="empty">本周报无条目</div>', 4));
+    return cards;
   }
-  metaRows.push(['接地相别', kv['接地相别'] || text.match(/接地相别[：:]\s*([^\s，,；;]+)/)?.[1] || '']);
-  metaRows.push(['是否有接地选线', sel]);
-  // 母线看板：多条候选线路时线路清单已在下方「候选线路」区统一陈列，元信息不再重复；
-  // 其它情况（含母线无选线“接地选线线路名称：否”）始终给出该字段，保证第三种模板七字段完整
-  const showSelLine = isBus
-    ? busLines.length > 1 ? false : !!selLine
-    : sel && /是|有/.test(sel);
-  if (showSelLine) metaRows.push(['接地选线线路名称', selLine]);
-  metaRows.push(['是否瞬时接地', instant]);
-
-  const lowPhase = (() => {
-    const uaN = numOf(ua), ubN = numOf(ub), ucN = numOf(uc);
-    if (uaN != null && uaN < 2) return 'Ua';
-    if (ubN != null && ubN < 2) return 'Ub';
-    if (ucN != null && ucN < 2) return 'Uc';
-    return '';
-  })();
-  const lowVal = lowPhase === 'Ua' ? ua : lowPhase === 'Ub' ? ub : lowPhase === 'Uc' ? uc : '';
-  const phLabel = phaseLabel(kv['接地相别']);
-  const note = lowPhase
-    ? `三相电压中 <b>${lowPhase} = ${escQ(lowVal)}</b> 显著低于正常相（约 5.8kV） → 疑似 <b>${phLabel}${escQ(isBus ? '母线' : '线路')}接地</b>`
-    : '三相电压分布';
-
-  return `
-      <section class="card type-card type-${isBus ? 'bus' : 'ground'}" id="type-${type}">
-        <div class="type-bar"></div>
-        <div class="type-head">
-          <div class="type-title"><h2>${escQ(type)}</h2><span class="type-pill">${isBus ? '母线接地定位' : '接地定位分析'}</span></div>
-          <div class="type-sub">${isBus ? '母线架构 · 三相电压 · 接地选线' : '三相电压 · 接地选线 · 故障定位'}</div>
-        </div>
-
-        <div class="phase-wrap">
-          ${phaseHtml('Ua', ua)}${phaseHtml('Ub', ub)}${phaseHtml('Uc', uc)}
-        </div>
-        <div class="phase-note${lowPhase ? ' alert' : ''}">${note}</div>
-
-        ${metaRows.filter(([, v]) => v).length ? `
-        <div class="sub-block">
-          <div class="sub-title">${escQ(isBus ? '母线接地信息' : '接地信息')}</div>
-          <div class="kv2">
-            ${metaRows.filter(([, v]) => v).map(([k, v]) => `<div class="kv2-item"><span>${escQ(k)}</span><b>${escQ(v)}</b></div>`).join('')}
-          </div>
-        </div>` : ''}
-
-        ${isBus && busLines.length ? `
-        <div class="sub-block">
-          <div class="sub-title">接地选线 · 候选线路（${busLines.length} 条）</div>
-          <div class="line-tags">
-            ${busLines.map((l, i) => {
-              const isMain = /(?:10|20|35|110|220|330|500)kV/.test(l);
-              return `<div class="line-tag ${isMain ? 'main' : 'branch'}">${escQ(l)}<small>候选线路 ${i + 1} · ${isMain ? '主线' : '支线'}</small></div>`;
-            }).join('')}
-          </div>
-        </div>` : ''}
-
-        <details class="raw-inline"><summary>该段原始输入</summary><pre>${escQ(text)}</pre></details>
-      </section>`;
+  const sections = parseAnswerSections(answer);
+  const weekSecs = sections.filter((s) => /故障信息|历史故障|近三年/.test(s.title));
+  weekSecs.forEach((s) => {
+    const items = s.lines.map((l) => l.trim()).filter(Boolean);
+    const md = parseMdTable(items);
+    if (md) {
+      const maps = md.rows.map((r) => {
+        const o = {};
+        md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
+        return o;
+      }).filter((r) => md.headers.some((h) => !isBlankCell(r[h]) && !/^(无|—)$/.test(String(r[h]).trim())));
+      if (maps.length) {
+        cards.push(gCard(`周报 · ${s.title}`, `${weekCaption(maps)}${renderRecordCards(md.headers, maps)}`, 4));
+        return;
+      }
+    }
+    if (items.length === 1 && /^无$/.test(items[0])) return;
+    if (items.length) cards.push(gCard(`周报 · ${s.title}`, `<div class="narr">${esc(items.join('\n'))}</div>`, 4));
+  });
+  if (!cards.length) cards.push(gCard('历史故障', '<div class="empty">本周报无条目</div>', 4));
+  return cards;
 }
 
-function renderTypeDetail(section, extraText) {
-  const text = section.text;
-  const kv = extractKV(section.text);
-  const escQ = esc;
-  if (section.type === '跳闸') return renderTypeTrip(text, kv, escQ);
-  return renderTypeVoltage(section.type, text, kv, escQ, extraText);
+function archiveCards(answer, mainType) {
+  const cards = [];
+  if (mainType === '母线接地') {
+    const blocks = parseAnswerBlocks(answer);
+    const supply = blocks.find((b) => b.title === '供电所概况' || b.title.includes('供电所概况'));
+    if (supply) cards.push(gCard('供电所概况', renderRowTables(supply.lines), 6));
+    const lineBlocks = blocks.filter((b) => /\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(b.title));
+    lineBlocks.forEach((b) => {
+      const body = renderLineDetail(b.lines) || '<div class="empty">无</div>';
+      cards.push(gCard(b.title, body, 6));
+    });
+    return cards.length ? cards : [gCard('线路档案', '<div class="empty">无</div>', 6)];
+  }
+  const sections = parseAnswerSections(answer);
+  const archiveSecs = sections.filter((s) => !/信息同步|试拉|故障信息|历史故障/.test(s.title));
+  archiveSecs.forEach((s) => {
+    const body = renderRowTables(s.lines) || '<div class="empty">无</div>';
+    const span = /联系人|穿越|密集/.test(s.title) ? 6 : 4;
+    cards.push(gCard(s.title, body, span));
+  });
+  if (!cards.length) cards.push(gCard('线路档案', '<div class="empty">无</div>', 6));
+  return cards;
 }
 
-// ---------------- 母线接地 · 大屏三列布局 ----------------
+function buildKpiRows(query, answer, mainType) {
+  const src = `${query}\n${answer}`;
+  const qkv = extractKV(query);
+  const eventTime = findEventTime(src);
+  const kpiLine = (src.match(/(10kV|20kV|35kV|110kV)[^\s，,]*/) || [''])[0] || '—';
+  const kpiStation = ((src.match(/([\u4e00-\u9fa5]{2,8})站/) || ['', ''])[1] ? (src.match(/([\u4e00-\u9fa5]{2,8})站/)[1] + '站') : '—');
+  if (mainType === '跳闸') {
+    let loss = (src.match(/损失[\s\S]{0,8}电流[^0-9]{0,6}([0-9.\-]+)\s*A?/) || ['', '—'])[1] || '—';
+    if (/^[\d.\-]+$/.test(loss)) loss += ' A';
+    return [
+      ['类型', mainType], ['厂站', kpiStation === '站' ? '—' : kpiStation], ['线路', kpiLine],
+      ['事件时间', eventTime || qkv['动作时间'] || '—'], ['损失电流', loss],
+      ['跳闸前接地', (src.match(/跳闸前[^，,]{0,10}(有接地|无接地|有|无)/) || ['', '—'])[1] || '—'],
+    ];
+  }
+  if (mainType === '母线接地') {
+    return [
+      ['类型', mainType], ['厂站', qkv['厂站名称'] || kpiStation], ['母线', qkv['母线名称'] || '—'],
+      ['接地相别', qkv['接地相别'] || '—'], ['事件时间', eventTime || '—'],
+      ['候选线路', String(collectCandidateLines(query, answer, qkv, { forceScan: true }).length || '—')],
+    ];
+  }
+  return [
+    ['类型', '单线接地'], ['厂站', qkv['厂站名称'] || kpiStation], ['线路', kpiLine],
+    ['接地相别', qkv['接地相别'] || '—'], ['事件时间', eventTime || '—'],
+    ['Ua/Ub/Uc', `${qkv['Ua'] || '—'} / ${qkv['Ub'] || '—'} / ${qkv['Uc'] || '—'}`],
+  ];
+}
 
 // 按“供电所概况 / 一、线路 / 试拉建议 / 信息同步”标题切分接口 answer
 function parseAnswerBlocks(answer) {
@@ -867,457 +942,231 @@ function renderRowTables(lines) {
   return html;
 }
 
-// ---------------- HTML 组装（苹果风） ----------------
+// 解析接口 answer 为章节
+function parseAnswerSections(answer) {
+  const lines = String(answer || '').split(/\r?\n/);
+  const sections = [];
+  let current = null;
+  for (const raw of lines) {
+    const line = raw.replace(/^\s+/, '').replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    const m = line.match(/^([一二三四五六七八九十0-9]+)[、\.]\s*(.+)$/);
+    if (m) {
+      // 标题若在同一行内带出内容（如“二、供电所联系人和电话：张 剑：13xxxxxxxxx”），
+      // 拆出标题与这段内容，内容并入该章节正文顶部，避免被吞进标题。
+      let title = m[2].trim().replace(/[：:]\s*$/, '');
+      let extra = '';
+      const tm = title.match(/^(.+?)[：:]\s*(\S.*)$/);
+      if (tm) { title = tm[1].trim(); extra = tm[2]; }
+      current = { title, lines: extra ? [extra] : [] };
+      sections.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  return sections;
+}
+
+function renderKvList(pairs) {
+  if (!pairs.length) return '';
+  return `<div class="relay-list">${pairs.map(([k, v]) => `<div class="relay-item"><span class="relay-name">${esc(k)}</span><b class="relay-val">${esc(v)}</b></div>`).join('')}</div>`;
+}
+
+function renderNarrative(text) {
+  const t = String(text || '').trim();
+  if (!t) return '';
+  return `<div class="narrative">${esc(t)}</div>`;
+}
+
+function renderGroupBlock(title, lines) {
+  const kv = [];
+  const prose = [];
+  lines.forEach((l) => {
+    const pairs = parseFieldPairs(l);
+    if (pairs.length === 1) kv.push(pairs[0]);
+    else if (pairs.length >= 2) kv.push(...pairs.filter(([, v]) => String(v || '').trim()));
+    else if (l.trim()) prose.push(l.trim());
+  });
+  return `
+      <div class="relay-group">
+        <div class="relay-group-title">${esc(title)}</div>
+        ${renderKvList(kv)}
+        ${prose.length ? renderNarrative(prose.join('\n')) : ''}
+      </div>`;
+}
+
+function renderRowTables(lines) {
+  const pure = lines.map((l) => String(l || '')).filter((l) => l.trim());
+  const md = parseMdTable(pure);
+  const rest = md ? pure.filter((l) => !/^\s*\|/.test(l)) : pure.slice();
+  let html = '';
+  if (md) {
+    const maps = md.rows.map((r) => {
+      const o = {};
+      md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
+      return o;
+    });
+    const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
+    if (blank) html += `<div class="text-block">无</div>`;
+    else {
+      if (md.headers.some((h) => /停电日期|故障原因/.test(h))) html += weekCaption(maps);
+      html += renderDataTable(md.headers, maps);
+    }
+  }
+
+  const records = [];
+  const singles = [];
+  const narratives = [];
+  const groups = [];
+  let curGroup = null;
+  const flush = () => {
+    if (curGroup && curGroup.lines.length) groups.push(curGroup);
+    curGroup = null;
+  };
+
+  for (const l of rest) {
+    const trimmed = l.trim();
+    // 分组标题行：以冒号结尾且冒号后无内容（如 “变电运维班：” “配抢值班：” “汇报领导:”）
+    if (/^(?!\d+[、\.]|[一二三四五六七八九十]+[、\.])[^：:]{1,20}[：:]\s*$/.test(trimmed)) {
+      flush();
+      curGroup = { title: trimmed.replace(/[：:]\s*$/, '').trim(), lines: [] };
+      continue;
+    }
+    if (curGroup) { curGroup.lines.push(trimmed); continue; }
+    const pairs = parseFieldPairs(trimmed);
+    if (pairs.length >= 2) records.push(pairs);
+    else if (pairs.length === 1) singles.push(pairs[0]);
+    else narratives.push(trimmed);
+  }
+  flush();
+
+  if (records.length) {
+    const headers = [];
+    records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
+    html += renderDataTable(headers, records.map(pairsToMap));
+  }
+  if (singles.length) html += renderKvList(singles);
+  if (narratives.length) html += renderNarrative(narratives.join('\n'));
+  if (groups.length) html += groups.map((g) => renderGroupBlock(g.title, g.lines)).join('');
+  return html;
+}
+
+
+// ---------------- HTML 组装（统一栅格） ----------------
 
 const CSS = `
-  :root{
-    --bg:#060d1a; --card:#0d1830; --card2:#122240; --ink:#eaf1fd; --sub:#8aa2c0;
-    --line:rgba(140,180,255,.16);
-    --blue:#3b82f6; --deep:#1d5fd0; --red:#ff5a4e;
-    --e-blue:#6bb3ff; --e-deep:#8ec2ff; --e-red:#ff8a80;
-    --sh1:0 10px 30px rgba(0,0,0,.45),0 26px 60px rgba(0,0,0,.30);
-    --r:20px;
-  }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  html { scroll-behavior:smooth; }
-  body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Microsoft YaHei","Segoe UI",sans-serif; color:var(--ink); line-height:1.55; -webkit-font-smoothing:antialiased; background:
-    radial-gradient(1100px 520px at 8% -6%, rgba(59,130,246,.16), transparent 60%),
-    radial-gradient(1100px 560px at 94% -10%, rgba(29,95,208,.14), transparent 60%),
-    radial-gradient(1000px 500px at 50% 0%, rgba(110,160,255,.08), transparent 55%),
-    #04070d; }
-  /* 顶部磨砂栏 + 深蓝渐变线 */
-  .topbar { position:sticky; top:0; z-index:50; background:rgba(9,15,29,.74); -webkit-backdrop-filter:saturate(180%) blur(20px); backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid rgba(140,180,255,.12); }
-  .topbar::after { content:""; display:block; height:3px; background:linear-gradient(90deg,#1d5fd0,#3b82f6,#6bb3ff); }
-  .topbar-in { max-width:1180px; margin:0 auto; display:flex; align-items:center; gap:26px; padding:13px 22px; flex-wrap:wrap; }
-  .brand { color:#fff; font-size:16px; font-weight:700; background:linear-gradient(90deg,var(--e-blue),#9cc6ff); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; white-space:nowrap; }
-  .brand small { display:block; font-size:11px; color:var(--sub); font-weight:400; -webkit-text-fill-color:var(--sub); }
-  nav { display:flex; gap:4px; flex-wrap:wrap; }
-  nav a { color:var(--sub); text-decoration:none; font-size:13px; padding:7px 14px; border-radius:20px; transition:.15s; white-space:nowrap; }
-  nav a:hover { background:linear-gradient(90deg,rgba(59,130,246,.20),rgba(150,190,255,.14)); color:#fff; }
-  .wrap { max-width:1180px; margin:0 auto; padding:36px 22px 90px; }
-  /* 顶部标题（深蓝渐变横幅 hero） */
-  .hero { margin-top:6px; padding:38px 32px 30px; border-radius:24px; color:#fff; background:
-    radial-gradient(900px 460px at 85% 120%, rgba(120,170,255,.30), transparent 60%),
-    radial-gradient(700px 420px at 10% 0%, rgba(74,130,240,.28), transparent 55%),
-    linear-gradient(120deg,#041a3e 0%,#0d3f96 45%,#1d5fd0 82%,#0b2c66 100%); box-shadow:0 18px 60px rgba(0,0,0,.55); position:relative; overflow:hidden; border:1px solid rgba(140,180,255,.20); }
-  .hero::after { content:""; position:absolute; left:0; right:0; bottom:0; height:4px; background:linear-gradient(90deg,#1d5fd0,#6bb3ff,#9cc6ff); }
-  .hero-kicker { display:inline-block; font-size:12px; font-weight:800; letter-spacing:2px; padding:3px 12px; border-radius:99px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); margin-bottom:10px; }
-  .hero h1 { font-size:32px; font-weight:800; letter-spacing:-.4px; text-shadow:0 2px 14px rgba(0,0,0,.35); }
-  .hero .meta { margin-top:14px; display:flex; gap:10px 26px; flex-wrap:wrap; font-size:13px; color:rgba(255,255,255,.92); }
-  .hero .meta span { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.24); padding:4px 12px; border-radius:99px; backdrop-filter:blur(4px); }
-  .hero .meta b { color:#fff; font-weight:700; }
-  /* 分区标题（蓝色竖条） */
-  .sec { padding-top:38px; }
-  .sec-title { font-size:22px; font-weight:800; letter-spacing:-.2px; scroll-margin-top:96px; padding-left:14px; position:relative; color:#fff; }
-  .sec-title::before { content:""; position:absolute; left:0; top:4px; bottom:4px; width:5px; border-radius:5px; background:linear-gradient(180deg,var(--e-blue),var(--deep)); }
-  .sec-note { font-size:13px; color:var(--sub); margin:6px 0 6px; }
-  /* KPI（深蓝数字卡，统一配色） */
-  .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; margin-top:22px; }
-  .kpi { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); padding:16px 18px 18px; box-shadow:var(--sh1); border:1px solid var(--line); border-top:4px solid var(--blue); position:relative; overflow:hidden; }
-  .kpi::after { content:""; position:absolute; right:-30px; top:-30px; width:80px; height:80px; border-radius:50%; background:var(--blue); opacity:.14; }
-  .kpi .kpi-value { color:var(--e-blue); }
-  .kpi-value { font-size:21px; font-weight:800; letter-spacing:-.3px; }
-  .kpi-label { font-size:12.5px; color:var(--sub); margin-top:4px; }
-  /* 通用卡片 */
-  .card { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; margin-top:16px; border:1px solid var(--line); min-width:0; }
-  .card-head { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,rgba(25,42,70,.9),rgba(12,22,42,.85)); }
-  .card-badge { background:linear-gradient(135deg,var(--deep),var(--e-blue)); color:#fff; font-size:12px; font-weight:700; border-radius:99px; padding:3px 11px; min-width:32px; text-align:center; box-shadow:0 3px 10px rgba(59,130,246,.35); }
-  .card-head h2 { font-size:16px; font-weight:700; color:#fff; }
-  .card-body { padding:14px 22px 18px; }
-  .text-block { background:rgba(19,35,60,.55); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-top:12px; color:var(--ink); }
-  /* 接口档案内的分组面板（如变电运维班 / 配抢值班 / 汇报领导） */
-  .relay-group { margin-top:12px; background:linear-gradient(180deg,rgba(18,34,64,.65),rgba(10,18,36,.55)); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:14px; padding:12px 14px 14px; }
-  .relay-group + .relay-group { margin-top:10px; }
-  .relay-group-title { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:750; color:var(--e-blue); background:linear-gradient(90deg,rgba(59,130,246,.20),rgba(59,130,246,.05)); padding:4px 13px; border-radius:99px; margin-bottom:10px; }
-  .relay-group-title::before { content:""; width:8px; height:8px; border-radius:50%; background:linear-gradient(135deg,var(--e-blue),var(--deep)); }
-  .relay-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(205px,1fr)); gap:8px; }
-  .relay-item { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; background:rgba(9,16,32,.6); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
-  .relay-name { font-size:13px; color:var(--sub); white-space:nowrap; flex-shrink:0; }
-  .relay-val { font-size:14.5px; font-weight:750; color:var(--e-blue); font-variant-numeric:tabular-nums; word-break:break-all; text-align:right; }
-  .relay-item.relay-full { grid-column:1 / -1; color:var(--ink); font-size:13px; }
-  /* 类型卡模板（深蓝主题，三类型同色统一） */
-  .type-card { position:relative; margin-top:30px; padding:0 26px 26px; }
-  .type-bar { height:6px; width:72px; border-radius:6px; margin:26px 0 12px; background:linear-gradient(90deg,var(--deep),var(--e-blue)); box-shadow:0 3px 12px rgba(59,130,246,.4); }
-  .type-head { padding-right:0; }
-  .type-title { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .type-title h2 { font-size:24px; font-weight:800; letter-spacing:-.3px; color:#fff; }
-  .type-pill { font-size:12px; font-weight:700; color:#fff; padding:4px 14px; border-radius:99px; letter-spacing:1px; box-shadow:0 3px 10px rgba(0,0,0,.4); background:linear-gradient(135deg,var(--deep),var(--e-blue)); }
-  .type-sub { font-size:13px; color:var(--sub); margin-top:4px; }
-  .sub-block { margin-top:22px; }
-  .sub-title { font-size:14px; font-weight:750; margin-bottom:10px; padding-left:10px; border-left:4px solid var(--blue); color:#fff; }
-  /* 跳闸模板：时间线（统一可视化面板，与三相电压卡同型） */
-  .trip-flow { display:flex; align-items:flex-start; margin:22px 0 6px; background:linear-gradient(180deg,rgba(18,34,64,.7),rgba(10,18,36,.6)); border:1px solid var(--line); border-radius:18px; padding:22px 18px 14px; box-shadow:0 8px 20px rgba(0,0,0,.35); }
-  .tf-step { flex:1 1 150px; position:relative; padding-right:20px; }
-  .tf-dot { width:28px; height:28px; border-radius:50%; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; position:relative; z-index:2; box-shadow:0 0 0 5px rgba(59,130,246,.22); background:linear-gradient(135deg,var(--deep),var(--e-blue)); }
-  .tf-line { position:absolute; top:13.5px; left:28px; right:20px; height:2.5px; border-radius:3px; background:linear-gradient(90deg,var(--blue),rgba(59,130,246,.16)); }
-  .tf-caption { margin-top:12px; font-size:13px; color:var(--sub); }
-  .tf-caption b { display:block; color:#fff; font-size:16px; font-weight:700; margin-top:2px; }
-  .kv-table { margin-top:6px; }
-  /* 表格 */
-  .table-wrap { width:100%; max-width:100%; min-width:0; overflow-x:auto; margin-top:8px; }
-  .narrative { margin-top:8px; background:rgba(19,35,60,.55); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:12px; padding:12px 14px; white-space:pre-wrap; word-break:break-word; line-height:1.75; font-size:14px; color:var(--ink); }
-  .week-cap { margin:4px 0 8px; font-size:12.5px; line-height:1.5; color:#d7e6ff; background:rgba(59,130,246,.12); border:1px solid rgba(120,170,255,.35); border-radius:10px; padding:8px 12px; }
-  table.dt { width:max-content; min-width:100%; border-collapse:collapse; font-size:13.5px; margin:0; }
-  table.dt th { color:#fff; background:linear-gradient(135deg,#1c2c48,#2a4068); font-weight:650; font-size:12.5px; text-align:left; padding:9px 12px; border:none; white-space:normal; line-height:1.35; }
-  table.dt td { padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-word; overflow-wrap:anywhere; color:var(--ink); }
-  table.dt tbody tr:nth-child(even) td { background:rgba(19,35,60,.4); }
-  table.dt tbody tr:last-child td { border-bottom:none; }
-  /* kv 卡片 */
-  .kv2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
-  .kv2-item { background:linear-gradient(180deg,rgba(18,34,64,.6),rgba(12,24,46,.5)); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:14px; padding:13px 16px; }
-  .kv2-item span { display:block; font-size:12px; color:var(--sub); }
-  .kv2-item b { display:inline-block; font-size:15px; font-weight:700; margin-top:2px; word-break:break-all; color:var(--ink); }
-  .kv2-item.ok { border-left-color:var(--blue); } .kv2-item.ok b { color:var(--e-blue); }
-  .kv2-item.warn { border-left-color:var(--red); } .kv2-item.warn b { color:var(--e-red); }
-  /* 三相电压模板（深蓝渐变基准条） */
-  .phase-wrap { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0 4px; }
-  .phase { background:linear-gradient(180deg,rgba(18,34,64,.7),rgba(10,18,36,.6)); border:1px solid var(--line); border-radius:18px; padding:18px 18px 16px; text-align:center; box-shadow:0 8px 20px rgba(0,0,0,.35); }
-  .phase-label { font-size:13px; color:var(--sub); font-weight:700; letter-spacing:1px; }
-  .phase-bar { height:7px; border-radius:7px; margin:14px 0 10px; overflow:hidden; background:rgba(140,180,255,.14); }
-  .phase-fill { height:100%; border-radius:7px; }
-  .phase.ok .phase-fill { background:linear-gradient(90deg,var(--deep),var(--e-blue)); box-shadow:0 2px 10px rgba(59,130,246,.45); }
-  .phase.low .phase-fill { background:linear-gradient(90deg,var(--red),#ff8a5c); box-shadow:0 2px 10px rgba(255,90,78,.45); }
-  .phase-val { font-size:26px; font-weight:800; letter-spacing:-.5px; }
-  .phase-note { font-size:13px; color:var(--ink); margin:16px 2px 0; background:rgba(59,130,246,.07); border:1px solid rgba(120,170,255,.30); border-left:4px solid var(--blue); border-radius:14px; padding:12px 16px; }
-  .phase-note.alert { background:rgba(255,90,78,.09); border-color:rgba(255,90,78,.36); border-left-color:var(--red); }
-  .phase-note b { color:#fff; font-weight:700; }
-  /* 多线路标签（母线接地，深蓝统一底色 + 字色区分主线/支线） */
-  .line-tags { display:flex; flex-wrap:wrap; gap:10px; margin-top:6px; }
-  .line-tag { border-radius:12px; padding:9px 14px; font-size:14px; font-weight:700; }
-  .line-tag.main { background:linear-gradient(135deg,rgba(59,130,246,.26),rgba(12,24,46,.6)); border:1px solid rgba(130,175,255,.75); color:#cfe0ff; box-shadow:0 4px 14px rgba(59,130,246,.16); }
-  .line-tag.branch { background:linear-gradient(135deg,rgba(140,180,255,.12),rgba(12,24,46,.45)); border:1px dashed rgba(140,180,255,.55); color:#a9c6ff; box-shadow:0 4px 12px rgba(90,140,255,.1); }
-  .line-tag small { display:block; font-size:11px; font-weight:500; color:var(--sub); }
-  /* 原始输入折叠 */
-  details.raw-inline { margin-top:14px; }
-  details.raw-inline summary { cursor:pointer; font-size:12.5px; color:var(--e-blue); }
-  details.raw-inline pre { background:rgba(9,16,32,.6); border:1px dashed var(--blue); border-radius:12px; padding:12px 14px; font-size:12.5px; line-height:1.7; white-space:pre-wrap; word-break:break-all; margin-top:8px; max-height:260px; overflow:auto; color:var(--ink); }
-  /* 原始全文折叠 */
-  details.rawbox { margin-top:36px; background:var(--card); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; }
-  details.rawbox summary { cursor:pointer; padding:16px 22px; font-size:14px; font-weight:700; color:#fff; background:linear-gradient(180deg,#16253f,#0e1a2e); }
-  .rawbox pre { padding:4px 22px 22px; font-size:13px; line-height:1.75; font-family:"SF Mono","Consolas","PingFang SC",monospace; white-space:pre-wrap; word-break:break-all; color:#c7d6ea; }
-  .foot { text-align:center; color:var(--sub); font-size:12px; margin-top:38px; }
-  @media (max-width:820px){
-    .phase-wrap { grid-template-columns:1fr; }
-    .kpi-grid { grid-template-columns:repeat(2,1fr); }
-    .trip-flow { flex-direction:column; gap:8px; }
-    .tf-line { display:none; }
-  }
-  /* ===== 母线接地 · 青色科技风大屏（占满屏幕 · 自适应 · 仅手动滚动） ===== */
-  /* 大屏局部配色变量（作用域仅限 body.bus-screen，不影响跳闸/接地模板） */
-  body.bus-screen {
-    --b-cyan:#00F0FF; --b-blue:#1E90FF; --b-ink:#FFFFFF; --b-ink2:#E0E6ED;
-    --b-dim:#8FA3BF; --b-bord:rgba(0,240,255,.2); --b-mod:rgba(13,27,62,.6);
-    background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(0,240,255,.10), transparent 60%),
-      radial-gradient(900px 520px at 0% 100%, rgba(30,144,255,.12), transparent 60%),
-      radial-gradient(900px 520px at 100% 100%, rgba(0,240,255,.08), transparent 60%),
-      #0B1221;
-    height:100vh; overflow:hidden;
-  }
-  /* 占满屏幕 + 不同分辨率自适应（侧列宽度随屏宽缩放、标题字号 clamp） */
-  .screen { height:100vh; max-width:none; margin:0; padding:14px 18px 16px; display:flex; flex-direction:column; }
-  .screen-head { flex:none; text-align:center; padding:6px 0 12px; }
-  .screen-title { font-size:clamp(20px,2.1vw,32px); font-weight:800; letter-spacing:.4px; line-height:1.3; background:linear-gradient(90deg,#00F0FF,#1E90FF); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 18px rgba(0,240,255,.28)); }
-  .screen-sub { margin-top:6px; font-size:12.5px; color:var(--b-dim); letter-spacing:.4px; line-height:1.45; }
-  /* 线路详情最宽；中间放母线与供电所；右侧放试拉和信息同步 */
-  .screen-grid { flex:1; min-height:0; display:grid; grid-template-columns:minmax(360px,1.35fr) minmax(280px,0.95fr) minmax(280px,0.85fr); grid-template-rows:minmax(0,1fr); gap:14px; }
-  /* 左列：线路详情（吃满高度）+ 候选线路（按内容自适应） */
-  .col { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
-  /* 中列：合并核心模块（上）+ 供电所概况（下，宽列联系人两列排布） */
-  .col-mid { display:grid; grid-template-rows:minmax(0,0.7fr) minmax(0,1.3fr); gap:14px; min-height:0; }
-  /* 右列：试拉建议（吃满高度）+ 信息同步（收尾，放最后，按内容自适应） */
-  .col-r { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
-  /* 模块：半透明深蓝玻璃质感 + 青色细边 + 四角科技感直角装饰 */
-  .panel { background:var(--b-mod); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid var(--b-bord); border-radius:6px; box-shadow:0 10px 30px rgba(0,0,0,.4); padding:12px 14px 14px; display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden; position:relative; }
-  .panel::before { content:""; position:absolute; top:-1px; left:50%; transform:translateX(-50%); width:48%; height:2px; background:linear-gradient(90deg,transparent,#00F0FF,#1E90FF,transparent); }
-  .panel::after { content:""; position:absolute; inset:0; pointer-events:none; border-radius:6px; background:
-    linear-gradient(var(--b-cyan),var(--b-cyan)) top left / 16px 2px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) top left / 2px 16px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) top right / 16px 2px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) top right / 2px 16px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom left / 16px 2px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom left / 2px 16px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom right / 16px 2px,
-    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom right / 2px 16px;
-    background-repeat:no-repeat; }
-  /* 模块标题：左侧 3px 青色竖条、靠左 */
-  .panel-title { font-size:15px; font-weight:700; color:#fff; text-align:left; letter-spacing:2px; display:flex; align-items:center; gap:9px; margin-bottom:10px; flex-shrink:0; }
-  .panel-title::before { content:""; width:3px; height:16px; background:var(--b-cyan); box-shadow:0 0 8px var(--b-cyan); flex-shrink:0; }
-  .panel-body { flex:1; min-height:0; min-width:0; overflow:auto; padding-right:5px; scrollbar-width:thin; scrollbar-color:rgba(0,240,255,.45) transparent; }
-  .panel-body::-webkit-scrollbar { width:8px; height:8px; }
-  .panel-body::-webkit-scrollbar-thumb { background:rgba(0,240,255,.4); border-radius:8px; }
-  /* 空数据提示 */
-  .empty-hint { height:100%; min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--b-dim); font-size:13px; letter-spacing:1px; }
-  .empty-hint .eh-ico { font-size:26px; color:rgba(0,240,255,.45); line-height:1; }
-  /* 线路选择器（半透明 + 青色边） */
-  .line-select { width:100%; background:rgba(13,27,62,.6); color:#eaffff; border:1px solid rgba(0,240,255,.4); border-radius:8px; padding:8px 12px; font-size:14px; font-weight:600; outline:none; cursor:pointer; margin-bottom:10px; flex-shrink:0; }
-  .line-select:focus { border-color:var(--b-cyan); box-shadow:0 0 0 2px rgba(0,240,255,.2); }
-  .line-select option { background:#0B1221; color:#eaffff; }
-  /* 线路详情：容器不滚、每条线路各自内滚（固定高度模块） */
-  .line-detail-wrap { overflow:hidden; display:flex; flex-direction:column; padding-right:0; }
-  .line-detail { flex:1; min-height:0; min-width:0; overflow:auto; padding-right:5px; scrollbar-width:thin; scrollbar-color:rgba(0,240,255,.45) transparent; }
-  .line-detail::-webkit-scrollbar { width:8px; height:8px; }
-  .line-detail::-webkit-scrollbar-thumb { background:rgba(0,240,255,.4); border-radius:8px; }
-  .ld-value { font-size:14px; font-weight:700; color:#fff; padding:0 2px 6px 11px; line-height:1.45; }
-  /* 线路详情子小节 */
-  .ld-sub { margin-bottom:12px; }
-  .ld-sub:last-child { margin-bottom:0; }
-  .ld-sub-title { font-size:12.5px; font-weight:700; color:var(--b-cyan); line-height:1.45; margin-bottom:7px; padding-left:8px; border-left:3px solid var(--b-cyan); }
-  .ld-none { font-size:12.5px; color:var(--b-dim); padding:0 2px 0 11px; }
-  .ld-seg { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-radius:8px; padding:8px 11px; margin-bottom:7px; }
-  .ld-seg:last-child { margin-bottom:0; }
-  .ld-seg-title { font-size:13px; font-weight:700; color:#cfefff; margin-bottom:5px; }
-  .ld-row { display:flex; gap:9px; font-size:12px; line-height:1.55; padding:3px 0; align-items:flex-start; }
-  .ld-row span { color:var(--b-dim); flex:0 0 5.6em; }
-  .ld-row b { color:var(--b-ink2); font-weight:650; word-break:break-word; overflow-wrap:anywhere; }
-  .ld-text { font-size:12px; color:var(--b-dim); line-height:1.6; padding:0 2px 0 11px; word-break:break-all; }
-  /* 中上核心模块（母线接地信息 + 三相电压定位）：两块内容纵向堆叠，整体溢出时内滚 */
-  .core-body { display:flex; flex-direction:column; gap:13px; }
-  .core-body .volt-wrap { flex:0 0 auto; }
-  .core-body .volt-note { margin-top:0; }
-  .volt-wrap { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; flex:1; align-content:center; margin-top:2px; }
-  .volt-note { margin-top:12px; font-size:13px; color:var(--b-ink2); background:rgba(255,77,94,.08); border:1px solid rgba(255,77,94,.36); border-left:4px solid #ff4d5e; border-radius:8px; padding:10px 14px; }
-  .volt-note b { color:#fff; }
-  .volt-note.ok { background:rgba(0,240,255,.06); border-color:rgba(0,240,255,.3); border-left-color:var(--b-cyan); }
-  /* 试拉建议 / 信息同步 文本条目 */
-  .adv-list { display:flex; flex-direction:column; gap:7px; }
-  .adv-item { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-left:3px solid var(--b-blue); border-radius:8px; padding:8px 11px; font-size:12.5px; color:var(--b-ink2); line-height:1.55; }
-  .adv-item b { color:var(--b-cyan); font-weight:700; }
-  .adv-item.head { background:rgba(0,240,255,.1); border-left-color:var(--b-cyan); color:#eaffff; font-weight:650; }
-  /* 三相电压（青色主色，低压相红警示） */
-  .bus-screen .phase { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-radius:10px; box-shadow:none; }
-  .bus-screen .phase-label { color:var(--b-dim); }
-  .bus-screen .phase-bar { background:rgba(0,240,255,.12); }
-  .bus-screen .phase.ok .phase-fill { background:linear-gradient(90deg,#1E90FF,#00F0FF); box-shadow:0 2px 10px rgba(0,240,255,.5); }
-  .bus-screen .phase.low .phase-fill { background:linear-gradient(90deg,#ff4d5e,#ff8a5c); box-shadow:0 2px 10px rgba(255,77,94,.5); }
-  /* kv 卡（母线接地信息） */
-  .bus-screen .kv2-item { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-left:3px solid var(--b-cyan); border-radius:8px; }
-  .bus-screen .kv2-item span { color:var(--b-dim); }
-  .bus-screen .kv2-item b { color:#fff; }
-  /* 供电所概况分组 */
-  .bus-screen .relay-group { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-left:3px solid var(--b-cyan); border-radius:8px; }
-  .bus-screen .relay-group-title { color:var(--b-cyan); background:linear-gradient(90deg,rgba(0,240,255,.16),rgba(0,240,255,.03)); }
-  .bus-screen .relay-group-title::before { background:linear-gradient(135deg,#00F0FF,#1E90FF); }
-  .bus-screen .relay-item { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-radius:8px; }
-  .bus-screen .relay-name { color:var(--b-dim); }
-  .bus-screen .relay-val { color:#00F0FF; }
-  .bus-screen .relay-item.relay-full { color:var(--b-ink2); }
-  /* 候选线路标签 */
-  .bus-screen .line-tag.main { background:linear-gradient(135deg,rgba(0,240,255,.18),rgba(13,27,62,.6)); border:1px solid rgba(0,240,255,.75); color:#cfefff; }
-  .bus-screen .line-tag.branch { background:linear-gradient(135deg,rgba(30,144,255,.14),rgba(13,27,62,.5)); border:1px dashed rgba(0,240,255,.5); color:#9fd8ff; }
-  /* 表格（如出现） */
-  .bus-screen table.dt th { background:linear-gradient(135deg,rgba(0,240,255,.16),rgba(30,144,255,.16)); color:#fff; }
-  .bus-screen table.dt td { color:var(--b-ink2); border-bottom:1px solid var(--b-bord); }
-  .bus-screen table.dt tbody tr:nth-child(even) td { background:rgba(0,240,255,.04); }
-  /* ===== 模块内容展示优化（仅视觉层，不改动任何数据，保证原样返回） ===== */
-  /* 数值统一等宽：kV/电话/长度/编号 在大屏上竖直对齐，更易读 */
-  body.bus-screen .panel-body { font-variant-numeric:tabular-nums; }
-  body.bus-screen .phase-val, body.bus-screen .ld-row b, body.bus-screen .adv-item { font-variant-numeric:tabular-nums; }
-  /* 三相电压做成紧凑短带（内容少，不应占大块高度） */
-  body.bus-screen .phase { padding:11px 13px 12px; }
-  body.bus-screen .phase-bar { margin:9px 0 7px; height:6px; }
-  body.bus-screen .phase-val { font-size:22px; }
-  body.bus-screen .volt-note { margin-top:10px; padding:8px 12px; font-size:12.5px; }
-  /* 母线接地信息：自适应单/双列，标签左·值右，键值更清晰 */
-  body.bus-screen .kv2 { grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:9px; }
-  body.bus-screen .kv2-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 13px; }
-  body.bus-screen .kv2-item span { display:block; flex-shrink:0; }
-  body.bus-screen .kv2-item b { display:block; text-align:right; word-break:break-all; }
-  /* 供电所概况：列表更紧凑，姓名左·电话右等宽，远读清晰 */
-  body.bus-screen .relay-list { gap:6px; }
-  body.bus-screen .relay-item { padding:7px 11px; align-items:center; gap:12px; }
-  body.bus-screen .relay-name { font-size:13px; }
-  body.bus-screen .relay-val { font-size:13px; margin-left:auto; text-align:right; word-break:break-all; }
-  body.bus-screen .relay-group { padding:10px 12px 12px; }
-  body.bus-screen .relay-group + .relay-group { margin-top:8px; }
-  body.bus-screen .relay-group-title { margin-bottom:8px; padding:3px 12px; font-size:13px; }
-  /* 供电所概况（中列宽列）：列宽足够时联系人/值班表两列排布，窄屏自动回落单列 */
-  body.bus-screen .col-mid .relay-list { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
-  /* 线路详情：小节标题 / 键值行字号略增，大屏远读 */
-  body.bus-screen .ld-sub-title { font-size:13px; }
-  body.bus-screen .ld-row { font-size:12.5px; }
-  /* 试拉建议 / 信息同步：条目字号略增 */
-  body.bus-screen .adv-item { font-size:13px; }
-  /* 候选线路：竖向列表，线路名左·序号右，更整齐 */
-  body.bus-screen .line-tags { flex-direction:column; align-items:stretch; gap:9px; }
-  body.bus-screen .line-tag { display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; }
-  body.bus-screen .line-tag small { display:block; margin-left:auto; text-align:right; white-space:nowrap; }
-  body.bus-screen .week-cap { color:#d7fbff; background:rgba(0,240,255,.08); border-color:rgba(0,240,255,.28); }
-  body.bus-screen .narrative { background:rgba(8,16,32,.55); border-color:var(--b-bord); border-left-color:var(--b-cyan); color:var(--b-ink2); word-break:normal; overflow-wrap:anywhere; }
-  body.bus-screen .table-wrap { margin-top:4px; }
-  /* 窄屏回退：堆叠为单列、允许页面滚动 */
-  @media (max-width:1120px){
-    body.bus-screen { height:auto; min-height:100vh; overflow:auto; }
-    .screen { height:auto; min-height:100vh; }
-    .screen-grid { grid-template-columns:1fr; grid-template-rows:none; }
-    .col, .col-mid, .col-r { grid-template-rows:none; }
-    .panel { min-height:240px; }
-  }
+  :root{--bg:#050b16;--card:#0e1a30;--card2:#132038;--ink:#e8f0fc;--sub:#8ea3c0;--line:rgba(120,170,255,.14);--blue:#3b82f6;--cyan:#5ec8ff;--red:#ff5a4e;--r:14px}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(900px 420px at 10% -8%,rgba(59,130,246,.12),transparent 55%),radial-gradient(900px 420px at 90% 0%,rgba(29,95,208,.1),transparent 55%),var(--bg);color:var(--ink);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .dash{max-width:1240px;margin:0 auto;padding:16px 18px 64px}
+  .dash-h{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 0 14px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .dash-h h1{font-size:22px;font-weight:800;letter-spacing:-.3px}
+  .dash-h .sub{font-size:12px;color:var(--sub);margin-top:4px}
+  .dash-h .meta{display:flex;gap:8px;flex-wrap:wrap}
+  .pill{font-size:12px;padding:4px 10px;border-radius:99px;background:rgba(59,130,246,.14);border:1px solid rgba(120,170,255,.28);color:#d7e8ff}
+  .g-sec{margin-top:26px}
+  .g-sec-t{font-size:15px;font-weight:800;color:#fff;margin-bottom:12px;padding-left:10px;border-left:3px solid var(--blue)}
+  .g-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;align-items:stretch}
+  .g-card{grid-column:span 4;background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:var(--r);min-height:148px;display:flex;flex-direction:column;overflow:hidden}
+  .g-card.span-6{grid-column:span 6}.g-card.span-8{grid-column:span 8}.g-card.span-12{grid-column:span 12}
+  .g-card-h{padding:10px 14px;font-size:12.5px;font-weight:700;color:var(--cyan);border-bottom:1px solid var(--line);background:rgba(255,255,255,.03);flex-shrink:0}
+  .g-card-b{padding:12px 14px;flex:1;font-size:13px;line-height:1.55;overflow:auto}
+  .kpi .g-card{min-height:92px;grid-column:span 2}
+  .kpi .g-card-b{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center}
+  .kpi-val{font-size:19px;font-weight:800;color:var(--cyan);word-break:break-all}
+  .kpi-lbl{font-size:11px;color:var(--sub);margin-top:4px}
+  .empty{color:var(--sub);font-size:13px;text-align:center;padding:18px 0}
+  .kv-mini{display:grid;gap:7px}
+  .kv-mini div{display:flex;justify-content:space-between;gap:10px;font-size:12.5px}
+  .kv-mini span{color:var(--sub);flex-shrink:0}
+  .kv-mini b{color:#fff;font-weight:650;text-align:right;word-break:break-all}
+  .phase-mini{text-align:center}
+  .phase-mini .pl{font-size:12px;color:var(--sub);font-weight:700}
+  .phase-mini .pv{font-size:22px;font-weight:800;margin-top:6px;color:var(--cyan)}
+  .phase-mini.low .pv{color:var(--red)}
+  .phase-bar{height:5px;background:rgba(255,255,255,.08);border-radius:5px;margin:8px 0;overflow:hidden}
+  .phase-fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:5px}
+  .phase-mini.low .phase-fill{background:linear-gradient(90deg,var(--red),#ff8a5c)}
+  .inner-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .trip-step{text-align:center;padding:8px 4px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px}
+  .trip-step .n{width:26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:12px}
+  .trip-step .v{margin-top:8px;font-size:14px;font-weight:700;color:#fff;word-break:break-all}
+  .trip-step .l{font-size:11px;color:var(--sub);margin-top:2px}
+  .narr{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}
+  .adv-row{display:flex;align-items:flex-start;gap:6px}
+  .adv-n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-size:11px;font-weight:800;flex-shrink:0}
+  .line-chip{display:inline-block;padding:5px 12px;border-radius:8px;background:rgba(59,130,246,.12);border:1px solid rgba(120,170,255,.35);font-size:13px;font-weight:650}
+  .week-cap{margin-bottom:8px;font-size:12px;color:#d7e6ff;background:rgba(59,130,246,.1);border:1px solid rgba(120,170,255,.28);border-radius:8px;padding:7px 10px}
+  .ld-seg{background:rgba(8,16,32,.45);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:7px}
+  .ld-seg:last-child{margin-bottom:0}
+  .ld-row{display:flex;gap:8px;font-size:12px;line-height:1.5;padding:2px 0}
+  .ld-row span{color:var(--sub);flex:0 0 5.5em}
+  .ld-row b{color:var(--ink);font-weight:650;word-break:break-word}
+  .ld-sub{margin-bottom:10px}
+  .ld-sub-title{font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px;padding-left:8px;border-left:3px solid var(--blue)}
+  .ld-none,.ld-text,.ld-value{font-size:12px;color:var(--sub)}
+  .relay-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px}
+  .relay-item{display:flex;justify-content:space-between;gap:8px;background:rgba(8,16,32,.45);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px}
+  .relay-name{color:var(--sub)}.relay-val{color:var(--cyan);font-weight:650;text-align:right;word-break:break-all}
+  .relay-group{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:8px;background:rgba(8,16,32,.35)}
+  .relay-group-title{font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px}
+  .table-wrap{overflow-x:auto}
+  table.dt{width:100%;border-collapse:collapse;font-size:12px}
+  table.dt th{background:rgba(59,130,246,.15);color:#fff;text-align:left;padding:7px 9px}
+  table.dt td{padding:7px 9px;border-bottom:1px solid var(--line);word-break:break-word}
+  details.raw{margin-top:28px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  details.raw summary{cursor:pointer;padding:12px 14px;font-size:13px;font-weight:700;background:rgba(255,255,255,.04)}
+  details.raw pre{padding:12px 14px 16px;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all;color:#c5d6ea;max-height:320px;overflow:auto}
+  .foot{text-align:center;color:var(--sub);font-size:12px;margin-top:32px}
+  @media(max-width:960px){.g-card,.g-card.span-6,.g-card.span-8{grid-column:span 6}.kpi .g-card{grid-column:span 4}.inner-4{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.g-card,.g-card.span-6,.g-card.span-8,.kpi .g-card{grid-column:span 12}.inner-4{grid-template-columns:1fr}}
 `;
 
-function buildHtml({ query, answer, typeSections }) {
-  // 主类型：按输入识别，一个看板只渲染对应的一种模板
+function buildHtml({ query, answer }) {
   const mainType = pickMain(query);
-  // 母线接地：走大屏三列布局
-  if (mainType === '母线接地') return renderBusScreen(query, answer);
-  const mainSection =
-    typeSections.find((s) => s.type === mainType) || { type: mainType, text: String(query).trim() };
-  const typeCards = mainSection.text ? renderTypeDetail(mainSection, answer) : '';
-
-  // 接口档案按「日报通报 / 周报历史 / 线路档案」拆开，避免混在同一串卡片里
-  const answerSections = parseAnswerSections(answer);
-  const sectionKind = (title) => {
-    if (/信息同步/.test(title)) return 'daily';
-    if (/故障信息|历史故障|周报/.test(title)) return 'weekly';
-    return 'archive';
-  };
-  const sectionBody = (title, lines) => {
-    const meaningful = lines.map((l) => String(l).trim()).filter(Boolean);
-    if (meaningful.length === 1 && /^无$/.test(meaningful[0])) return `<div class="text-block">无</div>`;
-    if (
-      meaningful.length === 1
-      && !meaningful[0].startsWith('|')
-      && !parseFieldPairs(meaningful[0]).length
-    ) {
-      const label = /供电所名称/.test(title) ? '供电所名称' : title;
-      return `<div class="kv2"><div class="kv2-item"><span>${esc(label)}</span><b>${esc(meaningful[0])}</b></div></div>`;
-    }
-    return renderRowTables(lines);
-  };
-  const cardsOf = (list) => list.map((s, i) => `
-      <section class="card">
-        <div class="card-head"><span class="card-badge">${esc(String(i + 1).padStart(2, '0'))}</span><h2>${esc(s.title)}</h2></div>
-        <div class="card-body">${sectionBody(s.title, s.lines)}</div>
-      </section>`).join('');
-  const dailySecs = answerSections.filter((s) => sectionKind(s.title) === 'daily');
-  const weekSecs = answerSections.filter((s) => sectionKind(s.title) === 'weekly');
-  const archiveSecs = answerSections.filter((s) => sectionKind(s.title) === 'archive');
-  let dailyBlocks = cardsOf(dailySecs);
-  let weekBlocks = cardsOf(weekSecs);
-  let answerBlocks = cardsOf(archiveSecs);
-  if (!answerSections.length) {
-    const emptyNotice = answer
-      ? ''
-      : `<div class="text-block" style="border:1px solid rgba(255,200,100,.35);background:rgba(255,180,60,.08);color:#f0d08a;">接口本次调用未返回数据（上游工作流偶发空返回，已自动重试）。以下档案区留空，故障针对性分析已根据您提交的故障信息完整列出。</div>`;
-    answerBlocks = `<section class="card"><div class="card-head"><span class="card-badge">01</span><h2>接口返回全文</h2></div><div class="card-body">${emptyNotice || `<div class="text-block">${esc(answer)}</div>`}</div></section>`;
-  }
-  if (!weekBlocks) {
-    weekBlocks = `<section class="card"><div class="card-head"><span class="card-badge">—</span><h2>历史故障</h2></div><div class="card-body"><div class="text-block">档案未单列历史故障，本周报无条目。</div></div></section>`;
-  }
-
-  // KPI：跳闸看动作与损失；接地看相别和三相电压。不再把跳闸字段套到接地日报上。
-  const src = answer || query;
-  const qkv = extractKV(query);
   const eventTime = findEventTime(`${query}\n${answer}`);
-  const kpiLine = (src.match(/(10kV|20kV|35kV|110kV)/) || [''])[0] || '—';
-  const kpiStation = ((src.match(/([\u4e00-\u9fa5]{2,8})站/) || ['', ''])[1] ? (src.match(/([\u4e00-\u9fa5]{2,8})站/)[1] + '站') : '—');
-  let kpiLoss = (src.match(/损失[\s\S]{0,6}电流[^0-9]{0,6}([0-9.\-]+)\s*A?/) || ['', '—'])[1] || '—';
-  if (/^[\d.\-]+$/.test(kpiLoss)) kpiLoss += ' A';
-  const kpiPre = (src.match(/跳闸前[^，,]{0,10}(有接地|无接地|有|无)/) || ['', '—'])[1] || '—';
-  const phase = qkv['接地相别'] || (String(query).match(/接地相别[：:]\s*(\S+)/) || [])[1] || '—';
-  const kpiRows = mainType === '跳闸'
-    ? [
-      ['故障类型', mainType],
-      ['厂站名称', kpiStation === '站' ? '—' : kpiStation],
-      ['电压等级', kpiLine],
-      ['动作时间', eventTime || qkv['动作时间'] || '—'],
-      ['损失电流', kpiLoss],
-      ['跳闸前接地', kpiPre],
-    ]
-    : [
-      ['故障类型', mainType],
-      ['厂站名称', kpiStation === '站' ? '—' : kpiStation],
-      ['电压等级', kpiLine],
-      ['接地相别', phase],
-      ['Ua', qkv['Ua'] || '—'],
-      ['Ub', qkv['Ub'] || '—'],
-      ['Uc', qkv['Uc'] || '—'],
-    ];
+  const kpiRows = buildKpiRows(query, answer, mainType);
+  const kpiHtml = gGrid(kpiRows.map(([k, v]) => gCard(k, `<div class="kpi-val">${esc(v)}</div><div class="kpi-lbl">${esc(k)}</div>`)), 'kpi');
 
-  const kpiCards = kpiRows
-    .map(
-      ([k, v]) => `
-    <div class="kpi">
-      <div class="kpi-value">${esc(v)}</div>
-      <div class="kpi-label">${esc(k)}</div>
-    </div>`
-    )
-    .join('');
+  let dailyCards;
+  if (mainType === '跳闸') dailyCards = tripDailyCards(query, answer);
+  else if (mainType === '母线接地') dailyCards = busDailyCards(query, answer);
+  else dailyCards = groundDailyCards(query, answer, true);
 
-  const navItems = [
-    ['overview', '日报'],
-    [`type-${mainType}`, '本次'],
-    ['daily-sync', '信息同步'],
-    ['weekly', '周报'],
-    ['answer', '线路档案'],
-    ['raw', '原文'],
-  ].filter(([id]) => id !== 'daily-sync' || dailyBlocks);
+  const dailyHtml = gGrid(dailyCards);
+  const weeklyHtml = gGrid(weeklyCards(answer, mainType));
+  const archiveHtml = gGrid(archiveCards(answer, mainType));
 
-  const lineName =
-    (String(answer || query).match(/([\u4e00-\u9fa5A-Za-z0-9]{0,20})?10kV[a-zA-Z0-9\u4e00-\u9fa5-]*/) || [''])[0] ||
-    '故障信息';
+  const lineName = (String(answer || query).match(/(10kV|20kV|35kV|110kV)[\u4e00-\u9fa5A-Za-z0-9-]*/) || [''])[0] || '故障信息';
+  const typeLabel = mainType === '接地' ? '单线接地' : mainType;
+  const title = `${esc(lineName)} · ${esc(typeLabel)}`;
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>故障信息分析看板 · 黄岛</title>
+<title>故障信息分析看板 · ${esc(typeLabel)}</title>
 <style>${CSS}</style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="topbar-in">
-      <div class="brand">故障信息分析看板<small>黄岛区 · 智能体接口实时数据</small></div>
-      <nav>
-        ${navItems.map(([id, label]) => `<a href="#${id}">${esc(label)}</a>`).join('')}
-      </nav>
-    </div>
-  </div>
-
-  <div class="wrap">
-    <div class="hero" id="overview">
-      <div class="hero-kicker">日报</div>
-      <h1>${esc(lineName)} · ${esc(mainType)}</h1>
+  <div class="dash">
+    <header class="dash-h">
+      <div><h1>${title}</h1><div class="sub">黄岛故障信息分析 · ${todayTime()}</div></div>
       <div class="meta">
-        <span><b>事件时间：</b>${esc(eventTime || '未标注')}</span>
-        <span><b>生成时间：</b>${todayTime()}</span>
-        <span><b>故障类型：</b>${mainType}</span>
+        <span class="pill">${esc(typeLabel)}</span>
+        <span class="pill">${esc(eventTime || '事件时间未标注')}</span>
       </div>
-    </div>
-
-    <div class="kpi-grid">${kpiCards}</div>
-
-    <div class="sec">
-      <div class="sec-title" id="types">日报 · 本次故障</div>
-      <div class="sec-note">只放本次${mainType}，不把历史故障或线路台账混进这一段</div>
-      ${typeCards}
-    </div>
-
-    ${dailyBlocks ? `<div class="sec" id="daily-sync">
-      <div class="sec-title">日报 · 信息同步</div>
-      <div class="sec-note">通报正文按原句展示，时间不再拆成字段</div>
-      ${dailyBlocks}
-    </div>` : ''}
-
-    <div class="sec" id="weekly">
-      <div class="sec-title">周报 · 历史故障</div>
-      <div class="sec-note">近三年故障按自然周归集；没有日期的记为无条目</div>
-      ${weekBlocks}
-    </div>
-
-    <div class="sec">
-      <div class="sec-title" id="answer">线路与联系人</div>
-      <div class="sec-note">供电所、林区与密集通道，供查阅，不重复贴在日报正文里</div>
-      ${answerBlocks}
-    </div>
-
-    <details class="rawbox" id="raw">
-      <summary>接口返回原始全文（一字未改，共 ${String(answer).length} 字）</summary>
+    </header>
+    ${gSection('overview', '概览', kpiHtml)}
+    ${gSection('daily', '日报', dailyHtml)}
+    ${gSection('weekly', '周报', weeklyHtml)}
+    ${gSection('archive', '线路档案', archiveHtml)}
+    <details class="raw" id="raw">
+      <summary>接口返回原文（${String(answer).length} 字）</summary>
       <pre>${answer ? esc(answer) : '（接口本次未返回数据）'}</pre>
     </details>
-
-    <div class="foot">数据全部来源于智能体接口返回原文与用户提交故障信息，展示时未脱敏、未修改、未删减 · 黄岛-故障信息分析助手</div>
+    <div class="foot">数据来源于智能体接口与用户提交故障信息 · 黄岛-故障信息分析助手</div>
   </div>
 </body>
 </html>`;
@@ -1364,10 +1213,10 @@ async function main() {
   const typeSections = parseQuerySections(query);
   let html;
   if (answer && answer.trim().length > 0) {
-    html = buildHtml({ query, answer, typeSections });
+    html = buildHtml({ query, answer });
   } else {
     console.warn('[警告] 接口多次调用均未返回数据，仍将基于用户输入的故障信息生成看板。');
-    html = buildHtml({ query, answer: '', typeSections });
+    html = buildHtml({ query, answer: '' });
   }
 
   const date = todayCompact();

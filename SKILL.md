@@ -5,7 +5,7 @@ description: Use when 用户提交黄岛地区跳闸、接地或母线接地故�
 
 # 黄岛-故障信息分析助手
 
-自动识别跳闸 / 接地 / 母线接地，调 chat 接口取分析结果，生成 HTML 看板；可选先展示再推送 i国网「信息同步」。接口地址与凭据封装在脚本内，无需改配置。
+自动识别跳闸 / 单线接地 / 母线多线，调 chat 接口取分析结果，生成 HTML 看板；可选先展示再推送 i国网「信息同步」。接口地址与凭据封装在脚本内，无需改配置。
 
 ## 目录结构
 
@@ -13,7 +13,7 @@ description: Use when 用户提交黄岛地区跳闸、接地或母线接地故�
 黄岛-故障信息分析助手/
   SKILL.md                 # 本说明
   index.js                 # chat 流式调用
-  gen_fault_html.js        # 生成 HTML 看板
+  gen_fault_html.js        # 生成 HTML 看板（统一栅格 v5）
   send_iguowang.js         # i国网信息同步（先展示后发送）
   samples/                 # 离线样例（seed / 示例输入）
   runtime/                 # 运行时落盘（query、push_msg）
@@ -22,8 +22,10 @@ description: Use when 用户提交黄岛地区跳闸、接地或母线接地故�
 
 | 路径 | 用途 |
 |------|------|
-| `samples/*_seed.txt` | 离线接口档案，改样式复现用 |
-| `samples/query_bus.example.txt` | 母线接地示例输入 |
+| `samples/trip_seed.txt` | 跳闸离线档案（不带试拉） |
+| `samples/ground_trial_seed.txt` | 单线接地带试拉离线档案 |
+| `samples/bus_seed.txt` | 母线多线离线档案 |
+| `samples/query_*.example.txt` | 三类输入示例 |
 | `runtime/query.txt` | 最近一次故障原文（脚本自动写） |
 | `runtime/push_msg.txt` | 待推送「信息同步」（可改后再发） |
 | `output/*.html` | 看板产物 |
@@ -61,31 +63,25 @@ description: Use when 用户提交黄岛地区跳闸、接地或母线接地故�
 | `FAULT_SEED_FILE` | 离线档案路径 |
 | `FAULT_OUT_DIR` | 看板输出目录；默认 `output/` |
 
-```powershell
-$env:NODE_PATH = "<工作区>\node_modules"
-$env:FAULT_SEED_FILE = ".\samples\bus_seed.txt"
-node gen_fault_html.js (Get-Content -Raw .\samples\query_bus.example.txt)
-```
-
 ```bash
 export NODE_PATH="<工作区>/node_modules"
-export FAULT_SEED_FILE="./samples/bus_seed.txt"
-node gen_fault_html.js "$(cat ./samples/query_bus.example.txt)"
+export FAULT_SEED_FILE="./samples/trip_seed.txt"
+node gen_fault_html.js "$(cat ./samples/query_trip.example.txt)"
 ```
 
 看板文件：`output/故障信息分析看板_<主类型>_yyyyMMdd.html`
 
-## 主类型与模板
+## 主类型与模板（统一栅格）
 
-识别：优先行首 `跳闸：` / `接地：` / `母线接地：`；否则关键词回退。一看板一套模板。
+识别：优先行首 `跳闸：` / `接地：` / `母线接地：`；否则关键词回退。**三种输入各一套独立看板**，全部使用 12 列统一栅格，卡片等高、密度一致，少描述文字。
 
-| 类型 | 形态 | 要点 |
-|------|------|------|
-| 跳闸 | 日报一页 | 时间线 + 过流动作；信息同步单独成段；历史故障进周报 |
-| 接地 | 日报一页 | 三相电压 + 接地信息；低压相 &lt;2kV 红警示；KPI 用相别和电压 |
-| 母线接地 | 全屏三列 | 线路详情用表格；历史故障带自然周区间；信息同步保持整句 |
+| 类型 | 输入示例 | 日报区 | 试拉 | 周报 |
+|------|----------|--------|------|------|
+| 跳闸（不带试拉） | `query_trip.example.txt` | 跳闸过程 + 过流动作 + 信息同步 | 无 | 历史故障 |
+| 单线接地（带试拉） | `query_ground_trial.example.txt` | 三相电压 + 接地信息 + 试拉优先级卡 + 信息同步 | 有 | 历史故障 |
+| 母线多线 | `query_bus_multi.example.txt` | 母线信息 + 三相电压 + 候选线路 + 试拉 + 信息同步 | 有 | 各线路历史故障 |
 
-日报只放本次事件和信息同步。周报只放带停电日期的历史故障，并写出周一至周日的日期范围。线路台账（供电所、林区、密集通道）单独成区，原文默认折叠。
+页面分区固定为：**概览 KPI → 日报 → 周报 → 线路档案 → 原文折叠**。日报与周报卡片使用同一栅格规格，禁止一大块一小块混排。
 
 ## 标准输入字段
 
@@ -94,8 +90,6 @@ node gen_fault_html.js "$(cat ./samples/query_bus.example.txt)"
 | 跳闸 | 厂站、线路、过流动作（装置/类型/时间/值）、跳闸前接地、跳闸后复归、损失负荷电流 |
 | 接地 | 相别、Ua/Ub/Uc、是否有接地选线、选线线路名、是否瞬时接地 |
 | 母线接地 | 厂站、母线名称、相别、Ua/Ub/Uc、是否有接地选线、选线线路名、是否瞬时接地 |
-
-示例见 `samples/query_bus.example.txt`。
 
 ## 流式事件（index.js）
 
@@ -120,3 +114,4 @@ userid：`--userid` > `~/.claude` / `~/.sgcode` 文档中 32 位 hex > 路径中
 | 找不到 query / push_msg | 看 `runtime/`，不是根目录 |
 | seed 路径写旧名 | 用 `samples/xxx_seed.txt` |
 | 直接 `--send` | 先展示并确认 |
+| 跳闸看板出现试拉 | 检查输入是否为 `跳闸：`，试拉仅接地/母线 |
