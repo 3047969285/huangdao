@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>大珠山站 10kV甲母线 母线接地分析大屏</title>
+<style>
+  :root{
+    --bg:#060d1a; --card:#0d1830; --card2:#122240; --ink:#eaf1fd; --sub:#8aa2c0;
+    --line:rgba(140,180,255,.16);
+    --blue:#3b82f6; --deep:#1d5fd0; --red:#ff5a4e;
+    --e-blue:#6bb3ff; --e-deep:#8ec2ff; --e-red:#ff8a80;
+    --sh1:0 10px 30px rgba(0,0,0,.45),0 26px 60px rgba(0,0,0,.30);
+    --r:20px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html { scroll-behavior:smooth; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Microsoft YaHei","Segoe UI",sans-serif; color:var(--ink); line-height:1.55; -webkit-font-smoothing:antialiased; background:
+    radial-gradient(1100px 520px at 8% -6%, rgba(59,130,246,.16), transparent 60%),
+    radial-gradient(1100px 560px at 94% -10%, rgba(29,95,208,.14), transparent 60%),
+    radial-gradient(1000px 500px at 50% 0%, rgba(110,160,255,.08), transparent 55%),
+    #04070d; }
+  /* 顶部磨砂栏 + 深蓝渐变线 */
+  .topbar { position:sticky; top:0; z-index:50; background:rgba(9,15,29,.74); -webkit-backdrop-filter:saturate(180%) blur(20px); backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid rgba(140,180,255,.12); }
+  .topbar::after { content:""; display:block; height:3px; background:linear-gradient(90deg,#1d5fd0,#3b82f6,#6bb3ff); }
+  .topbar-in { max-width:1180px; margin:0 auto; display:flex; align-items:center; gap:26px; padding:13px 22px; flex-wrap:wrap; }
+  .brand { color:#fff; font-size:16px; font-weight:700; background:linear-gradient(90deg,var(--e-blue),#9cc6ff); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; white-space:nowrap; }
+  .brand small { display:block; font-size:11px; color:var(--sub); font-weight:400; -webkit-text-fill-color:var(--sub); }
+  nav { display:flex; gap:4px; flex-wrap:wrap; }
+  nav a { color:var(--sub); text-decoration:none; font-size:13px; padding:7px 14px; border-radius:20px; transition:.15s; white-space:nowrap; }
+  nav a:hover { background:linear-gradient(90deg,rgba(59,130,246,.20),rgba(150,190,255,.14)); color:#fff; }
+  .wrap { max-width:1180px; margin:0 auto; padding:36px 22px 90px; }
+  /* 顶部标题（深蓝渐变横幅 hero） */
+  .hero { margin-top:6px; padding:38px 32px 30px; border-radius:24px; color:#fff; background:
+    radial-gradient(900px 460px at 85% 120%, rgba(120,170,255,.30), transparent 60%),
+    radial-gradient(700px 420px at 10% 0%, rgba(74,130,240,.28), transparent 55%),
+    linear-gradient(120deg,#041a3e 0%,#0d3f96 45%,#1d5fd0 82%,#0b2c66 100%); box-shadow:0 18px 60px rgba(0,0,0,.55); position:relative; overflow:hidden; border:1px solid rgba(140,180,255,.20); }
+  .hero::after { content:""; position:absolute; left:0; right:0; bottom:0; height:4px; background:linear-gradient(90deg,#1d5fd0,#6bb3ff,#9cc6ff); }
+  .hero h1 { font-size:32px; font-weight:800; letter-spacing:-.4px; text-shadow:0 2px 14px rgba(0,0,0,.35); }
+  .hero .meta { margin-top:14px; display:flex; gap:10px 26px; flex-wrap:wrap; font-size:13px; color:rgba(255,255,255,.92); }
+  .hero .meta span { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.24); padding:4px 12px; border-radius:99px; backdrop-filter:blur(4px); }
+  .hero .meta b { color:#fff; font-weight:700; }
+  /* 分区标题（蓝色竖条） */
+  .sec { padding-top:38px; }
+  .sec-title { font-size:22px; font-weight:800; letter-spacing:-.2px; scroll-margin-top:96px; padding-left:14px; position:relative; color:#fff; }
+  .sec-title::before { content:""; position:absolute; left:0; top:4px; bottom:4px; width:5px; border-radius:5px; background:linear-gradient(180deg,var(--e-blue),var(--deep)); }
+  .sec-note { font-size:13px; color:var(--sub); margin:6px 0 6px; }
+  /* KPI（深蓝数字卡，统一配色） */
+  .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; margin-top:22px; }
+  .kpi { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); padding:16px 18px 18px; box-shadow:var(--sh1); border:1px solid var(--line); border-top:4px solid var(--blue); position:relative; overflow:hidden; }
+  .kpi::after { content:""; position:absolute; right:-30px; top:-30px; width:80px; height:80px; border-radius:50%; background:var(--blue); opacity:.14; }
+  .kpi .kpi-value { color:var(--e-blue); }
+  .kpi-value { font-size:21px; font-weight:800; letter-spacing:-.3px; }
+  .kpi-label { font-size:12.5px; color:var(--sub); margin-top:4px; }
+  /* 通用卡片 */
+  .card { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; margin-top:16px; border:1px solid var(--line); }
+  .card-head { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,rgba(25,42,70,.9),rgba(12,22,42,.85)); }
+  .card-badge { background:linear-gradient(135deg,var(--deep),var(--e-blue)); color:#fff; font-size:12px; font-weight:700; border-radius:99px; padding:3px 11px; min-width:32px; text-align:center; box-shadow:0 3px 10px rgba(59,130,246,.35); }
+  .card-head h2 { font-size:16px; font-weight:700; color:#fff; }
+  .card-body { padding:6px 22px 20px; }
+  .text-block { background:rgba(19,35,60,.55); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-top:12px; color:var(--ink); }
+  /* 接口档案内的分组面板（如变电运维班 / 配抢值班 / 汇报领导） */
+  .relay-group { margin-top:12px; background:linear-gradient(180deg,rgba(18,34,64,.65),rgba(10,18,36,.55)); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:14px; padding:12px 14px 14px; }
+  .relay-group + .relay-group { margin-top:10px; }
+  .relay-group-title { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:750; color:var(--e-blue); background:linear-gradient(90deg,rgba(59,130,246,.20),rgba(59,130,246,.05)); padding:4px 13px; border-radius:99px; margin-bottom:10px; }
+  .relay-group-title::before { content:""; width:8px; height:8px; border-radius:50%; background:linear-gradient(135deg,var(--e-blue),var(--deep)); }
+  .relay-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(205px,1fr)); gap:8px; }
+  .relay-item { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; background:rgba(9,16,32,.6); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
+  .relay-name { font-size:13px; color:var(--sub); white-space:nowrap; flex-shrink:0; }
+  .relay-val { font-size:14.5px; font-weight:750; color:var(--e-blue); font-variant-numeric:tabular-nums; word-break:break-all; text-align:right; }
+  .relay-item.relay-full { grid-column:1 / -1; color:var(--ink); font-size:13px; }
+  /* 类型卡模板（深蓝主题，三类型同色统一） */
+  .type-card { position:relative; margin-top:30px; padding:0 26px 26px; }
+  .type-bar { height:6px; width:72px; border-radius:6px; margin:26px 0 12px; background:linear-gradient(90deg,var(--deep),var(--e-blue)); box-shadow:0 3px 12px rgba(59,130,246,.4); }
+  .type-head { padding-right:0; }
+  .type-title { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .type-title h2 { font-size:24px; font-weight:800; letter-spacing:-.3px; color:#fff; }
+  .type-pill { font-size:12px; font-weight:700; color:#fff; padding:4px 14px; border-radius:99px; letter-spacing:1px; box-shadow:0 3px 10px rgba(0,0,0,.4); background:linear-gradient(135deg,var(--deep),var(--e-blue)); }
+  .type-sub { font-size:13px; color:var(--sub); margin-top:4px; }
+  .sub-block { margin-top:22px; }
+  .sub-title { font-size:14px; font-weight:750; margin-bottom:10px; padding-left:10px; border-left:4px solid var(--blue); color:#fff; }
+  /* 跳闸模板：时间线（统一可视化面板，与三相电压卡同型） */
+  .trip-flow { display:flex; align-items:flex-start; margin:22px 0 6px; background:linear-gradient(180deg,rgba(18,34,64,.7),rgba(10,18,36,.6)); border:1px solid var(--line); border-radius:18px; padding:22px 18px 14px; box-shadow:0 8px 20px rgba(0,0,0,.35); }
+  .tf-step { flex:1 1 150px; position:relative; padding-right:20px; }
+  .tf-dot { width:28px; height:28px; border-radius:50%; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; position:relative; z-index:2; box-shadow:0 0 0 5px rgba(59,130,246,.22); background:linear-gradient(135deg,var(--deep),var(--e-blue)); }
+  .tf-line { position:absolute; top:13.5px; left:28px; right:20px; height:2.5px; border-radius:3px; background:linear-gradient(90deg,var(--blue),rgba(59,130,246,.16)); }
+  .tf-caption { margin-top:12px; font-size:13px; color:var(--sub); }
+  .tf-caption b { display:block; color:#fff; font-size:16px; font-weight:700; margin-top:2px; }
+  .kv-table { margin-top:6px; }
+  /* 表格 */
+  table.dt { width:100%; border-collapse:collapse; font-size:13.5px; margin:6px 0 4px; }
+  table.dt th { color:#fff; background:linear-gradient(135deg,#1c2c48,#2a4068); font-weight:650; font-size:12.5px; text-align:left; padding:9px 12px; border:none; white-space:nowrap; }
+  table.dt td { padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-all; color:var(--ink); }
+  table.dt tbody tr:nth-child(even) td { background:rgba(19,35,60,.4); }
+  table.dt tbody tr:last-child td { border-bottom:none; }
+  /* kv 卡片 */
+  .kv2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .kv2-item { background:linear-gradient(180deg,rgba(18,34,64,.6),rgba(12,24,46,.5)); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:14px; padding:13px 16px; }
+  .kv2-item span { display:block; font-size:12px; color:var(--sub); }
+  .kv2-item b { display:inline-block; font-size:15px; font-weight:700; margin-top:2px; word-break:break-all; color:var(--ink); }
+  .kv2-item.ok { border-left-color:var(--blue); } .kv2-item.ok b { color:var(--e-blue); }
+  .kv2-item.warn { border-left-color:var(--red); } .kv2-item.warn b { color:var(--e-red); }
+  /* 三相电压模板（深蓝渐变基准条） */
+  .phase-wrap { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0 4px; }
+  .phase { background:linear-gradient(180deg,rgba(18,34,64,.7),rgba(10,18,36,.6)); border:1px solid var(--line); border-radius:18px; padding:18px 18px 16px; text-align:center; box-shadow:0 8px 20px rgba(0,0,0,.35); }
+  .phase-label { font-size:13px; color:var(--sub); font-weight:700; letter-spacing:1px; }
+  .phase-bar { height:7px; border-radius:7px; margin:14px 0 10px; overflow:hidden; background:rgba(140,180,255,.14); }
+  .phase-fill { height:100%; border-radius:7px; }
+  .phase.ok .phase-fill { background:linear-gradient(90deg,var(--deep),var(--e-blue)); box-shadow:0 2px 10px rgba(59,130,246,.45); }
+  .phase.low .phase-fill { background:linear-gradient(90deg,var(--red),#ff8a5c); box-shadow:0 2px 10px rgba(255,90,78,.45); }
+  .phase-val { font-size:26px; font-weight:800; letter-spacing:-.5px; }
+  .phase-note { font-size:13px; color:var(--ink); margin:16px 2px 0; background:rgba(59,130,246,.07); border:1px solid rgba(120,170,255,.30); border-left:4px solid var(--blue); border-radius:14px; padding:12px 16px; }
+  .phase-note.alert { background:rgba(255,90,78,.09); border-color:rgba(255,90,78,.36); border-left-color:var(--red); }
+  .phase-note b { color:#fff; font-weight:700; }
+  /* 多线路标签（母线接地，深蓝统一底色 + 字色区分主线/支线） */
+  .line-tags { display:flex; flex-wrap:wrap; gap:10px; margin-top:6px; }
+  .line-tag { border-radius:12px; padding:9px 14px; font-size:14px; font-weight:700; }
+  .line-tag.main { background:linear-gradient(135deg,rgba(59,130,246,.26),rgba(12,24,46,.6)); border:1px solid rgba(130,175,255,.75); color:#cfe0ff; box-shadow:0 4px 14px rgba(59,130,246,.16); }
+  .line-tag.branch { background:linear-gradient(135deg,rgba(140,180,255,.12),rgba(12,24,46,.45)); border:1px dashed rgba(140,180,255,.55); color:#a9c6ff; box-shadow:0 4px 12px rgba(90,140,255,.1); }
+  .line-tag small { display:block; font-size:11px; font-weight:500; color:var(--sub); }
+  /* 原始输入折叠 */
+  details.raw-inline { margin-top:14px; }
+  details.raw-inline summary { cursor:pointer; font-size:12.5px; color:var(--e-blue); }
+  details.raw-inline pre { background:rgba(9,16,32,.6); border:1px dashed var(--blue); border-radius:12px; padding:12px 14px; font-size:12.5px; line-height:1.7; white-space:pre-wrap; word-break:break-all; margin-top:8px; max-height:260px; overflow:auto; color:var(--ink); }
+  /* 原始全文折叠 */
+  details.rawbox { margin-top:36px; background:var(--card); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; }
+  details.rawbox summary { cursor:pointer; padding:16px 22px; font-size:14px; font-weight:700; color:#fff; background:linear-gradient(180deg,#16253f,#0e1a2e); }
+  .rawbox pre { padding:4px 22px 22px; font-size:13px; line-height:1.75; font-family:"SF Mono","Consolas","PingFang SC",monospace; white-space:pre-wrap; word-break:break-all; color:#c7d6ea; }
+  .foot { text-align:center; color:var(--sub); font-size:12px; margin-top:38px; }
+  @media (max-width:820px){
+    .phase-wrap { grid-template-columns:1fr; }
+    .kpi-grid { grid-template-columns:repeat(2,1fr); }
+    .trip-flow { flex-direction:column; gap:8px; }
+    .tf-line { display:none; }
+  }
+  /* ===== 母线接地 · 青色科技风大屏（占满屏幕 · 自适应 · 仅手动滚动） ===== */
+  /* 大屏局部配色变量（作用域仅限 body.bus-screen，不影响跳闸/接地模板） */
+  body.bus-screen {
+    --b-cyan:#00F0FF; --b-blue:#1E90FF; --b-ink:#FFFFFF; --b-ink2:#E0E6ED;
+    --b-dim:#8FA3BF; --b-bord:rgba(0,240,255,.2); --b-mod:rgba(13,27,62,.6);
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(0,240,255,.10), transparent 60%),
+      radial-gradient(900px 520px at 0% 100%, rgba(30,144,255,.12), transparent 60%),
+      radial-gradient(900px 520px at 100% 100%, rgba(0,240,255,.08), transparent 60%),
+      #0B1221;
+    height:100vh; overflow:hidden;
+  }
+  /* 占满屏幕 + 不同分辨率自适应（侧列宽度随屏宽缩放、标题字号 clamp） */
+  .screen { height:100vh; max-width:none; margin:0; padding:14px 18px 16px; display:flex; flex-direction:column; }
+  .screen-head { flex:none; text-align:center; padding:6px 0 12px; }
+  .screen-title { font-size:clamp(22px,2.3vw,34px); font-weight:800; letter-spacing:6px; background:linear-gradient(90deg,#00F0FF,#1E90FF); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 18px rgba(0,240,255,.28)); }
+  .screen-sub { margin-top:6px; font-size:12.5px; color:var(--b-dim); letter-spacing:2px; }
+  /* 按内容量分配版面：左右列各 30%（供电所概况/试拉建议+信息同步），中间 40%（合并核心 + 线路详情） */
+  .screen-grid { flex:1; min-height:0; display:grid; grid-template-columns:clamp(300px,30%,540px) minmax(0,1fr) clamp(300px,30%,540px); grid-template-rows:minmax(0,1fr); gap:14px; }
+  /* 左列：线路详情（吃满高度）+ 候选线路（按内容自适应） */
+  .col { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
+  /* 中列：合并核心模块（上）+ 供电所概况（下，宽列联系人两列排布） */
+  .col-mid { display:grid; grid-template-rows:minmax(0,0.7fr) minmax(0,1.3fr); gap:14px; min-height:0; }
+  /* 右列：试拉建议（吃满高度）+ 信息同步（收尾，放最后，按内容自适应） */
+  .col-r { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
+  /* 模块：半透明深蓝玻璃质感 + 青色细边 + 四角科技感直角装饰 */
+  .panel { background:var(--b-mod); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid var(--b-bord); border-radius:6px; box-shadow:0 10px 30px rgba(0,0,0,.4); padding:12px 14px 14px; display:flex; flex-direction:column; min-height:0; overflow:hidden; position:relative; }
+  .panel::before { content:""; position:absolute; top:-1px; left:50%; transform:translateX(-50%); width:48%; height:2px; background:linear-gradient(90deg,transparent,#00F0FF,#1E90FF,transparent); }
+  .panel::after { content:""; position:absolute; inset:0; pointer-events:none; border-radius:6px; background:
+    linear-gradient(var(--b-cyan),var(--b-cyan)) top left / 16px 2px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) top left / 2px 16px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) top right / 16px 2px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) top right / 2px 16px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom left / 16px 2px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom left / 2px 16px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom right / 16px 2px,
+    linear-gradient(var(--b-cyan),var(--b-cyan)) bottom right / 2px 16px;
+    background-repeat:no-repeat; }
+  /* 模块标题：左侧 3px 青色竖条、靠左 */
+  .panel-title { font-size:15px; font-weight:700; color:#fff; text-align:left; letter-spacing:2px; display:flex; align-items:center; gap:9px; margin-bottom:10px; flex-shrink:0; }
+  .panel-title::before { content:""; width:3px; height:16px; background:var(--b-cyan); box-shadow:0 0 8px var(--b-cyan); flex-shrink:0; }
+  .panel-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:5px; scrollbar-width:none; -ms-overflow-style:none; }
+  .panel-body::-webkit-scrollbar { display:none; }  /* 隐藏滚动条，保留滚轮/触摸板滚动 */
+  /* 空数据提示 */
+  .empty-hint { height:100%; min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--b-dim); font-size:13px; letter-spacing:1px; }
+  .empty-hint .eh-ico { font-size:26px; color:rgba(0,240,255,.45); line-height:1; }
+  /* 线路选择器（半透明 + 青色边） */
+  .line-select { width:100%; background:rgba(13,27,62,.6); color:#eaffff; border:1px solid rgba(0,240,255,.4); border-radius:8px; padding:8px 12px; font-size:14px; font-weight:600; outline:none; cursor:pointer; margin-bottom:10px; flex-shrink:0; }
+  .line-select:focus { border-color:var(--b-cyan); box-shadow:0 0 0 2px rgba(0,240,255,.2); }
+  .line-select option { background:#0B1221; color:#eaffff; }
+  /* 线路详情：容器不滚、每条线路各自内滚（固定高度模块） */
+  .line-detail-wrap { overflow:hidden; display:flex; flex-direction:column; padding-right:0; }
+  .line-detail { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:5px; scrollbar-width:none; -ms-overflow-style:none; }
+  .line-detail::-webkit-scrollbar { display:none; }
+  /* 线路详情子小节 */
+  .ld-sub { margin-bottom:12px; }
+  .ld-sub:last-child { margin-bottom:0; }
+  .ld-sub-title { font-size:12.5px; font-weight:700; color:var(--b-cyan); line-height:1.45; margin-bottom:7px; padding-left:8px; border-left:3px solid var(--b-cyan); }
+  .ld-none { font-size:12.5px; color:var(--b-dim); padding:0 2px 0 11px; }
+  .ld-seg { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-radius:8px; padding:8px 11px; margin-bottom:7px; }
+  .ld-seg:last-child { margin-bottom:0; }
+  .ld-seg-title { font-size:13px; font-weight:700; color:#cfefff; margin-bottom:5px; }
+  .ld-row { display:flex; gap:9px; font-size:12px; line-height:1.6; padding:1.5px 0; }
+  .ld-row span { color:var(--b-dim); flex-shrink:0; min-width:60px; }
+  .ld-row b { color:var(--b-ink2); font-weight:650; word-break:break-all; }
+  .ld-text { font-size:12px; color:var(--b-dim); line-height:1.6; padding:0 2px 0 11px; word-break:break-all; }
+  /* 中上核心模块（母线接地信息 + 三相电压定位）：两块内容纵向堆叠，整体溢出时内滚 */
+  .core-body { display:flex; flex-direction:column; gap:13px; }
+  .core-body .volt-wrap { flex:0 0 auto; }
+  .core-body .volt-note { margin-top:0; }
+  .volt-wrap { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; flex:1; align-content:center; margin-top:2px; }
+  .volt-note { margin-top:12px; font-size:13px; color:var(--b-ink2); background:rgba(255,77,94,.08); border:1px solid rgba(255,77,94,.36); border-left:4px solid #ff4d5e; border-radius:8px; padding:10px 14px; }
+  .volt-note b { color:#fff; }
+  .volt-note.ok { background:rgba(0,240,255,.06); border-color:rgba(0,240,255,.3); border-left-color:var(--b-cyan); }
+  /* 试拉建议 / 信息同步 文本条目 */
+  .adv-list { display:flex; flex-direction:column; gap:7px; }
+  .adv-item { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-left:3px solid var(--b-blue); border-radius:8px; padding:8px 11px; font-size:12.5px; color:var(--b-ink2); line-height:1.55; }
+  .adv-item b { color:var(--b-cyan); font-weight:700; }
+  .adv-item.head { background:rgba(0,240,255,.1); border-left-color:var(--b-cyan); color:#eaffff; font-weight:650; }
+  /* 三相电压（青色主色，低压相红警示） */
+  .bus-screen .phase { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-radius:10px; box-shadow:none; }
+  .bus-screen .phase-label { color:var(--b-dim); }
+  .bus-screen .phase-bar { background:rgba(0,240,255,.12); }
+  .bus-screen .phase.ok .phase-fill { background:linear-gradient(90deg,#1E90FF,#00F0FF); box-shadow:0 2px 10px rgba(0,240,255,.5); }
+  .bus-screen .phase.low .phase-fill { background:linear-gradient(90deg,#ff4d5e,#ff8a5c); box-shadow:0 2px 10px rgba(255,77,94,.5); }
+  /* kv 卡（母线接地信息） */
+  .bus-screen .kv2-item { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-left:3px solid var(--b-cyan); border-radius:8px; }
+  .bus-screen .kv2-item span { color:var(--b-dim); }
+  .bus-screen .kv2-item b { color:#fff; }
+  /* 供电所概况分组 */
+  .bus-screen .relay-group { background:rgba(13,27,62,.5); border:1px solid var(--b-bord); border-left:3px solid var(--b-cyan); border-radius:8px; }
+  .bus-screen .relay-group-title { color:var(--b-cyan); background:linear-gradient(90deg,rgba(0,240,255,.16),rgba(0,240,255,.03)); }
+  .bus-screen .relay-group-title::before { background:linear-gradient(135deg,#00F0FF,#1E90FF); }
+  .bus-screen .relay-item { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-radius:8px; }
+  .bus-screen .relay-name { color:var(--b-dim); }
+  .bus-screen .relay-val { color:#00F0FF; }
+  .bus-screen .relay-item.relay-full { color:var(--b-ink2); }
+  /* 候选线路标签 */
+  .bus-screen .line-tag.main { background:linear-gradient(135deg,rgba(0,240,255,.18),rgba(13,27,62,.6)); border:1px solid rgba(0,240,255,.75); color:#cfefff; }
+  .bus-screen .line-tag.branch { background:linear-gradient(135deg,rgba(30,144,255,.14),rgba(13,27,62,.5)); border:1px dashed rgba(0,240,255,.5); color:#9fd8ff; }
+  /* 表格（如出现） */
+  .bus-screen table.dt th { background:linear-gradient(135deg,rgba(0,240,255,.16),rgba(30,144,255,.16)); color:#fff; }
+  .bus-screen table.dt td { color:var(--b-ink2); border-bottom:1px solid var(--b-bord); }
+  .bus-screen table.dt tbody tr:nth-child(even) td { background:rgba(0,240,255,.04); }
+  /* ===== 模块内容展示优化（仅视觉层，不改动任何数据，保证原样返回） ===== */
+  /* 数值统一等宽：kV/电话/长度/编号 在大屏上竖直对齐，更易读 */
+  body.bus-screen .panel-body { font-variant-numeric:tabular-nums; }
+  body.bus-screen .phase-val, body.bus-screen .ld-row b, body.bus-screen .adv-item { font-variant-numeric:tabular-nums; }
+  /* 三相电压做成紧凑短带（内容少，不应占大块高度） */
+  body.bus-screen .phase { padding:11px 13px 12px; }
+  body.bus-screen .phase-bar { margin:9px 0 7px; height:6px; }
+  body.bus-screen .phase-val { font-size:22px; }
+  body.bus-screen .volt-note { margin-top:10px; padding:8px 12px; font-size:12.5px; }
+  /* 母线接地信息：自适应单/双列，标签左·值右，键值更清晰 */
+  body.bus-screen .kv2 { grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:9px; }
+  body.bus-screen .kv2-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 13px; }
+  body.bus-screen .kv2-item span { display:block; flex-shrink:0; }
+  body.bus-screen .kv2-item b { display:block; text-align:right; word-break:break-all; }
+  /* 供电所概况：列表更紧凑，姓名左·电话右等宽，远读清晰 */
+  body.bus-screen .relay-list { gap:6px; }
+  body.bus-screen .relay-item { padding:7px 11px; align-items:center; gap:12px; }
+  body.bus-screen .relay-name { font-size:13px; }
+  body.bus-screen .relay-val { font-size:13px; margin-left:auto; text-align:right; word-break:break-all; }
+  body.bus-screen .relay-group { padding:10px 12px 12px; }
+  body.bus-screen .relay-group + .relay-group { margin-top:8px; }
+  body.bus-screen .relay-group-title { margin-bottom:8px; padding:3px 12px; font-size:13px; }
+  /* 供电所概况（中列宽列）：列宽足够时联系人/值班表两列排布，窄屏自动回落单列 */
+  body.bus-screen .col-mid .relay-list { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  /* 线路详情：小节标题 / 键值行字号略增，大屏远读 */
+  body.bus-screen .ld-sub-title { font-size:13px; }
+  body.bus-screen .ld-row { font-size:12.5px; }
+  /* 试拉建议 / 信息同步：条目字号略增 */
+  body.bus-screen .adv-item { font-size:13px; }
+  /* 候选线路：竖向列表，线路名左·序号右，更整齐 */
+  body.bus-screen .line-tags { flex-direction:column; align-items:stretch; gap:9px; }
+  body.bus-screen .line-tag { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  /* 窄屏回退：堆叠为单列、允许页面滚动 */
+  @media (max-width:1120px){
+    body.bus-screen { height:auto; min-height:100vh; overflow:auto; }
+    .screen { height:auto; min-height:100vh; }
+    .screen-grid { grid-template-columns:1fr; grid-template-rows:none; }
+    .col, .col-mid, .col-r { grid-template-rows:none; }
+    .panel { min-height:240px; }
+  }
+</style>
+</head>
+<body class="bus-screen">
+  <div class="screen">
+    <div class="screen-head">
+      <div class="screen-title">大珠山站 10kV甲母线 母线接地分析大屏</div>
+      <div class="screen-sub">故障类型：母线接地 · 接地相别 C相 · 生成时间 2026-09-18 15:13:25</div>
+    </div>
+    <div class="screen-grid">
+      <!-- 左列：线路详情（上，吃满高度）+ 候选线路（按内容自适应） -->
+      <div class="col">
+        <div class="panel">
+          <div class="panel-title">线路详情（选择线路）</div>
+          <select class="line-select" id="lineSelect"><option value="0">10kV西营线</option><option value="1">10kV海滨园线</option><option value="2">10kV小口线</option></select>
+       <div class="panel-body line-detail-wrap"><div class="line-detail" id="lineDetail0"><div class="ld-wrap"><div class="ld-sub"><div class="ld-sub-title">供电所名称</div><div class="ld-seg"><div class="ld-row"><span>供电所名称</span><b>古镇口供电所</b></div></div></div><div class="ld-sub"><div class="ld-sub-title">线路是否穿越林区、穿越林区区段</div><div class="ld-seg"><div class="ld-row"><span>杆号区段</span><b>石屋沟支线#089-06杆至#089-16杆，所在林区：石屋子沟林地，穿越长度kM：0.5，区段描述：石屋沟支线#089-06杆至#089-16杆，石屋子沟林地，0.5</b></div></div><div class="ld-seg"><div class="ld-row"><span>杆号区段</span><b>大桥支线#063-02杆至#063-04杆，所在林区：大花口林地，穿越长度kM：0.1，区段描述：大桥支线#063-02杆至#063-04杆，大花口林地，0.1</b></div></div><div class="ld-seg"><div class="ld-row"><span>杆号区段</span><b>#105杆至#110杆，所在林区：大新庄林地，穿越长度kM：0.35，区段描述：#105杆至#110杆，大新庄林地，0.35</b></div></div><div class="ld-seg"><div class="ld-row"><span>杆号区段</span><b>广播电视台支线#071-15杆至#071-17，所在林区：中心山林地，穿越长度kM：0.1，区段描述：广播电视台支线#071-15杆至#071-17，中心山林地，0.1</b></div></div><div class="ld-seg"><div class="ld-row"><span>杆号区段</span><b>滨海农林支线#142-01杆至#142-09杆，所在林区：东古镇营林地，穿越长度kM：0.4，区段描述：滨海农林支线#142-01杆至#142-09杆，东古镇营林地，0.4</b></div></div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在密集通道</div><div class="ld-seg"><div class="ld-row"><span>起始点</span><b>石屋沟支线#089-06杆，终止点：#089-16杆，通道长度公里：0.5，隐患类型：穿越林区，区段描述：石屋沟支线#089-06杆，#089-16杆</b></div></div><div class="ld-seg"><div class="ld-row"><span>起始点</span><b>大桥支线#063-02杆，终止点：#063-04杆，通道长度公里：0.1，隐患类型：穿越林区，区段描述：大桥支线#063-02杆，#063-04杆</b></div></div><div class="ld-seg"><div class="ld-row"><span>起始点</span><b>#105杆，终止点：#110杆，通道长度公里：0.35，隐患类型：穿越林区，区段描述：#105杆，#110杆</b></div></div><div class="ld-seg"><div class="ld-row"><span>起始点</span><b>广播电视台支线#071-15杆，终止点：#071-17，通道长度公里：0.1，隐患类型：穿越林区，区段描述：广播电视台支线#071-15杆，#071-17</b></div></div><div class="ld-seg"><div class="ld-row"><span>起始点</span><b>滨海农林支线#142-01杆，终止点：#142-09杆，通道长度公里：0.4，隐患类型：穿越林区，区段描述：滨海农林支线#142-01杆，#142-09杆</b></div></div></div><div class="ld-sub"><div class="ld-sub-title">线路是否连接电厂、电站名字及位置</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在近三年的故障信息</div><div class="ld-seg"><div class="ld-seg-title">无</div></div></div></div></div><div class="line-detail" id="lineDetail1" style="display:none"><div class="ld-wrap"><div class="ld-sub"><div class="ld-sub-title">供电所名称</div><div class="ld-seg"><div class="ld-row"><span>供电所名称</span><b>古镇口供电所</b></div></div></div><div class="ld-sub"><div class="ld-sub-title">线路是否穿越林区、穿越林区区段</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在密集通道</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否连接电厂、电站名字及位置</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在近三年的故障信息</div><div class="ld-seg"><div class="ld-seg-title">10kV海滨园线 · 35kV大珠山站</div><div class="ld-row"><span>年度</span><b>2024</b></div><div class="ld-row"><span>停电日期</span><b>8月27日</b></div><div class="ld-row"><span>停电时间</span><b>6:09</b></div><div class="ld-row"><span>送电日期</span><b>8月27日</b></div><div class="ld-row"><span>送电时间</span><b>6:09</b></div><div class="ld-row"><span>故障原因</span><b>#1杆落雷导致BC相间短路</b></div></div></div></div></div><div class="line-detail" id="lineDetail2" style="display:none"><div class="ld-wrap"><div class="ld-sub"><div class="ld-sub-title">供电所名称</div><div class="ld-seg"><div class="ld-row"><span>供电所名称</span><b>古镇口供电所</b></div></div></div><div class="ld-sub"><div class="ld-sub-title">线路是否穿越林区、穿越林区区段</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在密集通道</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否连接电厂、电站名字及位置</div><div class="ld-none">无</div></div><div class="ld-sub"><div class="ld-sub-title">线路是否存在近三年的故障信息</div><div class="ld-seg"><div class="ld-seg-title">无</div></div></div></div></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">候选线路（接地选线）</div>
+          <div class="panel-body"><div class="line-tags"><div class="line-tag main">10kV西营线<small>候选线路 1</small></div><div class="line-tag main">10kV海滨园线<small>候选线路 2</small></div><div class="line-tag main">10kV小口线<small>候选线路 3</small></div><div class="line-tag branch">石屋沟支线<small>候选线路 4</small></div><div class="line-tag branch">大桥支线<small>候选线路 5</small></div><div class="line-tag branch">广播电视台支线<small>候选线路 6</small></div><div class="line-tag branch">滨海农林支线<small>候选线路 7</small></div></div></div>
+        </div>
+      </div>
+      <!-- 中列：合并核心模块（母线接地信息 + 三相电压定位）+ 供电所概况（下，宽列联系人两列排布） -->
+      <div class="col-mid">
+        <div class="panel">
+          <div class="panel-title">母线接地信息 · 三相电压定位</div>
+          <div class="panel-body core-body"><div class="kv2"><div class="kv2-item"><span>厂站名称</span><b>大珠山站</b></div><div class="kv2-item"><span>母线名称</span><b>10kV甲母线</b></div><div class="kv2-item"><span>接地相别</span><b>C相</b></div><div class="kv2-item"><span>是否有接地选线</span><b>否</b></div><div class="kv2-item"><span>接地选线线路名称</span><b>否</b></div><div class="kv2-item"><span>是否瞬时接地</span><b>否（持续接地）</b></div></div><div class="volt-wrap">
+      <div class="phase ok">
+        <div class="phase-label">Ua</div>
+        <div class="phase-bar"><div class="phase-fill" style="width:100%"></div></div>
+        <div class="phase-val" style="color:#00F0FF">5.8kV（正常）</div>
+      </div>
+      <div class="phase ok">
+        <div class="phase-label">Ub</div>
+        <div class="phase-bar"><div class="phase-fill" style="width:98%"></div></div>
+        <div class="phase-val" style="color:#00F0FF">5.7kV（正常）</div>
+      </div>
+      <div class="phase low">
+        <div class="phase-label">Uc</div>
+        <div class="phase-bar"><div class="phase-fill" style="width:5%"></div></div>
+        <div class="phase-val" style="color:#ff4d5e">0.3kV（降低）</div>
+      </div></div><div class="volt-note">三相电压中 <b>C相 = 0.3kV（降低）</b> 显著低于正常相（约 5.8kV） → 疑似 <b>C相母线接地</b></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">供电所概况</div>
+          <div class="panel-body"><div class="relay-list"><div class="relay-item"><span class="relay-name">供电所名称</span><b class="relay-val">古镇口供电所</b></div></div>
+      <div class="relay-group">
+        <div class="relay-group-title">供电所联系人和电话</div>
+        <div class="relay-list">
+          <div class="relay-item"><span class="relay-name">张 剑</span><b class="relay-val">13626399711</b></div><div class="relay-item"><span class="relay-name">周 根</span><b class="relay-val">15153207799</b></div><div class="relay-item"><span class="relay-name">供电所涉及线路名称</span><b class="relay-val">【10kV西营线】【10kV海滨园线】【10kV小口线】</b></div><div class="relay-item"><span class="relay-name">厂站所属单位</span><b class="relay-val">变电运维班</b></div>
+        </div>
+      </div>
+      <div class="relay-group">
+        <div class="relay-group-title">变电运维班</div>
+        <div class="relay-list">
+          <div class="relay-item"><span class="relay-name">值班</span><b class="relay-val">18661736980</b></div><div class="relay-item"><span class="relay-name">田 锋</span><b class="relay-val">13869816778</b></div><div class="relay-item"><span class="relay-name">姜明正</span><b class="relay-val">13969839102</b></div><div class="relay-item"><span class="relay-name">崔德军</span><b class="relay-val">13964261123</b></div><div class="relay-item"><span class="relay-name">张明飞</span><b class="relay-val">18561401183</b></div><div class="relay-item"><span class="relay-name">过艺伟</span><b class="relay-val">13854602662</b></div><div class="relay-item"><span class="relay-name">董妙妙</span><b class="relay-val">18863990568</b></div><div class="relay-item"><span class="relay-name">魏 靓</span><b class="relay-val">18810922619</b></div><div class="relay-item"><span class="relay-name">李志腾</span><b class="relay-val">15165770970</b></div><div class="relay-item"><span class="relay-name">王青云</span><b class="relay-val">13475805717</b></div>
+        </div>
+      </div>
+      <div class="relay-group">
+        <div class="relay-group-title">配抢值班</div>
+        <div class="relay-list">
+          <div class="relay-item"><span class="relay-name">5101</span><b class="relay-val">88137000</b></div><div class="relay-item"><span class="relay-name">5102</span><b class="relay-val">88137000</b></div>
+        </div>
+      </div></div>
+        </div>
+      </div>
+      <!-- 右列：试拉建议（吃满高度）+ 信息同步（收尾，放在最后） -->
+      <div class="col-r">
+        <div class="panel">
+          <div class="panel-title">试拉建议</div>
+          <div class="panel-body"><div class="adv-list"><div class="adv-item head">优先试拉10kV西营线穿越林区区段，按优先级排序如下：</div><div class="adv-item">1. 滨海农林支线#142-01杆至#142-09杆（东古镇营林地，0.4km，密集通道+穿越林区）</div><div class="adv-item">2. 石屋沟支线#089-06杆至#089-16杆（石屋子沟林地，0.5km，密集通道+穿越林区）</div><div class="adv-item">3. #105杆至#110杆（大新庄林地，0.35km，密集通道+穿越林区）</div><div class="adv-item">4. 大桥支线#063-02杆至#063-04杆（大花口林地，0.1km，密集通道+穿越林区）</div><div class="adv-item">5. 广播电视台支线#071-15杆至#071-17（中心山林地，0.1km，密集通道+穿越林区）</div><div class="adv-item head">其次试拉10kV海滨园线#1杆区段（2024年8月27日因落雷导致BC相间短路，历史故障点）。</div><div class="adv-item">10kV小口线无穿越林区、密集通道及近三年故障记录，可最后试拉或与供电所协商顺序。</div></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">信息同步</div>
+          <div class="panel-body"><div class="adv-list"><div class="adv-item">汇报领导:</div><div class="adv-item">2026-08-27 14:21:27 大珠山站 10kV甲母线 C相 接地（A相 5.8kV，B相 5.7kV，C相 0.3kV），小电流接地选线无，已通知古镇口供电所，变电运维班。</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    // 线路选择器切换（切换后滚动位置归零）
+    var sel = document.getElementById('lineSelect');
+    if (sel) {
+      sel.addEventListener('change', function(){
+        var items = document.querySelectorAll('.line-detail');
+        for (var i=0;i<items.length;i++){ items[i].style.display = 'none'; items[i].scrollTop = 0; }
+        var t = document.getElementById('lineDetail' + sel.value);
+        if (t) t.style.display = 'block';
+      });
+    }
+    // 模块内容仅手动滚动（滚轮/触摸板/触摸），不做自动流转
+  })();
+  </script>
+</body>
+</html>
