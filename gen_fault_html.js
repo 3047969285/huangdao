@@ -56,10 +56,144 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
 function todayTime() {
   const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+function todayCompact() {
+  const d = new Date();
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
+}
+
+function fmtDay(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** 自然周（周一至周日） */
+function weekBounds(d) {
+  const mondayOffset = (d.getDay() + 6) % 7;
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - mondayOffset);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return { start, end, key: fmtDay(start) };
+}
+
+/**
+ * 本次事件时间。优先「信息同步」里的时间戳，其次任意日期时间，再次动作时间。
+ * @param {string} text
+ * @returns {string}
+ */
+function findEventTime(text) {
+  const src = String(text || '');
+  const sync = src.split(/信息同步/).slice(1).join('\n');
+  const fromSync = sync.match(/20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?/);
+  if (fromSync) return fromSync[0];
+  const any = src.match(/20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?/);
+  if (any) return any[0];
+  const act = src.match(/动作时间[：:]\s*([^\n]+)/);
+  return act ? act[1].trim() : '';
+}
+
+/** 小时:分钟 或「日期 + 小时」不是字段名，避免把通报正文拆成键值 */
+function isTimeFragment(key, value) {
+  if (/^\d{1,2}$/.test(key) && /^\d{2}(\D|$)/.test(String(value || ''))) return true;
+  if (/^\d{4}-\d{2}-\d{2}(?:\s+\d{1,2})?$/.test(key)) return true;
+  return false;
+}
+
+/**
+ * 把一行里的「键：值」拆开。分隔符是中文逗号、分号或两个以上空格。
+ * 值内部的逗号（区段描述）保留；时间里的冒号不当作新字段。
+ * @param {string} line
+ * @returns {Array<[string, string]>}
+ */
+function parseFieldPairs(line) {
+  const src = String(line || '').trim();
+  if (!src || src.startsWith('|')) return [];
+  const re = /([^\s：:，,；;|][^：:]{0,30}?)[：:]([\s\S]*?)(?=(?:[，,；;]\s*|\s{2,})(?=[^\s：:，,；;|][^：:]{0,30}?[：:])|$)/g;
+  const pairs = [];
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const k = m[1].trim();
+    const v = m[2].replace(/[，,；;]+\s*$/, '').trim();
+    if (!k || isTimeFragment(k, v)) continue;
+    pairs.push([k, v]);
+  }
+  return pairs;
+}
+
+const FIELD_ORDER = [
+  '线路名称', '变电站名称', '年度', '停电日期', '停电时间', '送电日期', '送电时间', '故障原因',
+  '杆号区段', '起始点', '终止点', '所在林区', '穿越长度kM', '通道长度公里', '隐患类型',
+  '备注', '其他隐患描述', '区段描述',
+];
+
+function orderHeaders(keys) {
+  return keys.slice().sort((a, b) => {
+    const ia = FIELD_ORDER.indexOf(a);
+    const ib = FIELD_ORDER.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+}
+
+function pairsToMap(pairs) {
+  const map = {};
+  pairs.forEach(([k, v]) => {
+    if (!(k in map)) map[k] = v;
+  });
+  return map;
+}
+
+function parseOutageDate(row) {
+  const year = String(row['年度'] || '').match(/20\d{2}/);
+  const md = String(row['停电日期'] || '');
+  const m = md.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  if (!year || !m) return null;
+  const d = new Date(Number(year[0]), Number(m[1]) - 1, Number(m[2]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isBlankCell(v) {
+  return !String(v || '').trim() || /^(无|—|-|\/)$/.test(String(v).trim());
+}
+
+/** 窄栏（母线大屏线路详情）用逐条卡片，避免多列表格把列挤没 */
+function renderRecordCards(headers, rows) {
+  const cols = orderHeaders(headers).filter((h) => rows.some((r) => !isBlankCell(r[h])));
+  const use = cols.length ? cols : orderHeaders(headers);
+  if (!use.length || !rows.length) return '';
+  return rows.map((r) => {
+    const body = use.map((h) => `<div class="ld-row"><span>${esc(h)}</span><b>${esc(r[h] != null ? r[h] : '—')}</b></div>`).join('');
+    return `<div class="ld-seg">${body}</div>`;
+  }).join('');
+}
+
+function renderDataTable(headers, rows) {
+  const cols = orderHeaders(headers).filter((h) => rows.some((r) => !isBlankCell(r[h])));
+  const use = cols.length ? cols : orderHeaders(headers);
+  if (!use.length || !rows.length) return '';
+  const head = use.map((h) => `<th>${esc(h)}</th>`).join('');
+  const body = rows
+    .map((r) => `<tr>${use.map((h) => `<td>${esc(r[h] != null ? r[h] : '')}</td>`).join('')}</tr>`)
+    .join('');
+  return `<div class="table-wrap"><table class="dt"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/** 有停电日期的记录按自然周出范围标题，和本次日报分开 */
+function weekCaption(rows) {
+  const dates = rows.map(parseOutageDate).filter(Boolean);
+  if (!dates.length) return '';
+  const groups = new Map();
+  dates.forEach((d) => {
+    const w = weekBounds(d);
+    if (!groups.has(w.key)) groups.set(w.key, w);
+  });
+  const labels = [...groups.values()].map((w) => `${fmtDay(w.start)} ~ ${fmtDay(w.end)}`);
+  return `<div class="week-cap">周报区间 ${esc(labels.join('；'))} · ${dates.length} 起 · 自然周（周一至周日），不与本次日报混排</div>`;
 }
 
 // 按段名切分 query（跳闸 / 接地 / 母线接地）
@@ -213,15 +347,6 @@ function renderTypeTrip(text, kv, escQ) {
           </div>
         </div>` : ''}
 
-        <div class="sub-block">
-          <div class="sub-title">跳闸前后状态</div>
-          <div class="kv2">
-            <div class="kv2-item ${/已复归|消失|复归/.test(postGround) ? 'ok' : 'warn'}"><span>跳闸前接地情况</span><b>${escQ(preGround || '—')}</b></div>
-            <div class="kv2-item ${/已复归|消失|复归/.test(postGround) ? 'ok' : 'warn'}"><span>跳闸后接地复归</span><b>${escQ(postGround || '—')}</b></div>
-            <div class="kv2-item"><span>损失负荷电流</span><b>${escQ(loss || '—')}</b></div>
-          </div>
-        </div>
-
         <details class="raw-inline"><summary>该段原始输入</summary><pre>${escQ(text)}</pre></details>
       </section>`;
 }
@@ -358,14 +483,9 @@ function parseAnswerBlocks(answer) {
   return blocks;
 }
 
-// 解析 “键：值；键：值” 分号分隔字段（穿越林区 / 密集通道等区段行）
+// 解析 “键：值；键：值” 或中文逗号 / 双空格分隔字段（穿越林区 / 密集通道等区段行）
 function semicolonKV(line) {
-  const pairs = [];
-  String(line).split(/；|;/).forEach((frag) => {
-    const m = frag.trim().match(/^([^：:]{1,25})[：:]\s*(.+)$/);
-    if (m && m[2].trim()) pairs.push([m[1].trim(), m[2].trim()]);
-  });
-  return pairs;
+  return parseFieldPairs(line).filter(([, v]) => String(v || '').trim());
 }
 
 // 解析 Markdown 表格行（| a | b |），返回 { headers, rows }；非表格返回 null
@@ -404,51 +524,52 @@ function renderLineDetail(lines) {
   const kept = subs.filter((s) => !/供电所联系人/.test(s.title));
   if (!kept.length) return '';
 
-  const kvRows = (pairs) => pairs.map(([k, v]) => `<div class="ld-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
   const NONE = `<div class="ld-none">无</div>`;
+  const mapsFromMd = (md) => md.rows.map((r) => {
+    const o = {};
+    md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
+    return o;
+  });
 
   const segHtml = kept
     .map((s) => {
-      const items = s.body.filter((l) => l.trim());
-      let body;
-      if (!s.value && (!items.length || (items.length === 1 && /^无$/.test(items[0].trim())))) {
-        body = NONE;
-      } else {
-        const parts = [];
-        if (s.value) parts.push(`<div class="ld-seg">${kvRows([[s.title, s.value]])}</div>`);
-        const md = parseMdTable(items);
-        if (md) {
-          if (md.headers.length > 4) {
-            // 窄列：多列表格转成逐条记录卡片（首两列做标题）
-            parts.push(
-              md.rows
-                .map((r) => {
-                  const title = [r[0], r[1]].filter(Boolean).join(' · ');
-                  const rest = md.headers
-                    .slice(2)
-                    .map((h, i) => [h, r[i + 2] != null ? r[i + 2] : ''])
-                    .filter(([, v]) => v !== '');
-                  return `<div class="ld-seg">${title ? `<div class="ld-seg-title">${esc(title)}</div>` : ''}${kvRows(rest)}</div>`;
-                })
-                .join('')
-            );
-          } else {
-            parts.push(
-              `<table class="dt"><thead><tr>${md.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>` +
-                md.rows.map((r) => `<tr>${md.headers.map((_, i) => `<td>${esc(r[i] != null ? r[i] : '')}</td>`).join('')}</tr>`).join('') +
-                '</tbody></table>'
-            );
-          }
-        } else {
-          const segs = items.map((l) => semicolonKV(l)).filter((p) => p.length);
-          if (segs.length) {
-            parts.push(segs.map((pairs) => `<div class="ld-seg">${kvRows(pairs)}</div>`).join(''));
-          } else if (items.length) {
-            parts.push(`<div class="ld-text">${items.map((l) => esc(l)).join('<br/>')}</div>`);
-          }
-        }
-        body = parts.length ? parts.join('') : NONE;
+      const items = s.body.map((l) => l.trim()).filter(Boolean);
+      const onlyNone = !s.value && (!items.length || (items.length === 1 && /^无$/.test(items[0])));
+      if (onlyNone) {
+        return `<div class="ld-sub"><div class="ld-sub-title">${esc(s.title)}</div>${NONE}</div>`;
       }
+      const parts = [];
+      if (s.value) parts.push(`<div class="ld-value">${esc(s.value)}</div>`);
+      const md = parseMdTable(items);
+      if (md) {
+        const maps = mapsFromMd(md);
+        const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
+        if (blank) parts.push(NONE);
+        else {
+          if (/故障/.test(s.title)) parts.push(weekCaption(maps));
+          parts.push(renderRecordCards(md.headers, maps));
+        }
+      } else {
+        const records = [];
+        const rest = [];
+        items.forEach((l) => {
+          const pairs = parseFieldPairs(l).filter(([, v]) => String(v || '').trim());
+          if (pairs.length >= 2) records.push(pairs);
+          else rest.push({ line: l, pairs });
+        });
+        if (records.length) {
+          const headers = [];
+          records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
+          parts.push(renderRecordCards(headers, records.map(pairsToMap)));
+        }
+        rest.forEach(({ line, pairs }) => {
+          if (/^无$/.test(line)) parts.push(NONE);
+          else if (pairs.length === 1) {
+            parts.push(`<div class="ld-row"><span>${esc(pairs[0][0])}</span><b>${esc(pairs[0][1])}</b></div>`);
+          } else parts.push(`<div class="ld-text">${esc(line)}</div>`);
+        });
+      }
+      const body = parts.length ? parts.join('') : NONE;
       return `<div class="ld-sub"><div class="ld-sub-title">${esc(s.title)}</div>${body}</div>`;
     })
     .join('');
@@ -528,7 +649,7 @@ function renderBusScreen(query, answer) {
   // 信息同步
   const syncLines = syncBlock ? syncBlock.lines.map((l) => l.trim()).filter(Boolean) : [];
   const syncHtml = syncLines.length
-    ? `<div class="adv-list">${syncLines.map((t) => `<div class="adv-item">${esc(t)}</div>`).join('')}</div>`
+    ? `<div class="narrative">${esc(syncLines.join('\n'))}</div>`
     : emptyHtml;
 
   // 供电所概况
@@ -562,8 +683,9 @@ function renderBusScreen(query, answer) {
        <div class="panel-body line-detail-wrap">${lineDetails}</div>`
     : `<div class="panel-body">${emptyHtml}</div>`;
 
+  const eventTime = findEventTime(`${answer}\n${query}`);
   const title = `${esc(station)} ${esc(busName)} 母线接地分析大屏`;
-  const sub = `故障类型：母线接地 · 接地相别 ${esc(phase)} · 生成时间 ${todayTime()}`;
+  const sub = `日报 · 母线接地 · 接地相别 ${esc(phase)}${eventTime ? ` · 事件时间 ${esc(eventTime)}` : ''} · 生成 ${todayTime()}`;
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -648,7 +770,7 @@ function parseAnswerSections(answer) {
     if (m) {
       // 标题若在同一行内带出内容（如“二、供电所联系人和电话：张 剑：13xxxxxxxxx”），
       // 拆出标题与这段内容，内容并入该章节正文顶部，避免被吞进标题。
-      let title = m[2].trim();
+      let title = m[2].trim().replace(/[：:]\s*$/, '');
       let extra = '';
       const tm = title.match(/^(.+?)[：:]\s*(\S.*)$/);
       if (tm) { title = tm[1].trim(); extra = tm[2]; }
@@ -661,9 +783,56 @@ function parseAnswerSections(answer) {
   return sections;
 }
 
+function renderKvList(pairs) {
+  if (!pairs.length) return '';
+  return `<div class="relay-list">${pairs.map(([k, v]) => `<div class="relay-item"><span class="relay-name">${esc(k)}</span><b class="relay-val">${esc(v)}</b></div>`).join('')}</div>`;
+}
+
+function renderNarrative(text) {
+  const t = String(text || '').trim();
+  if (!t) return '';
+  return `<div class="narrative">${esc(t)}</div>`;
+}
+
+function renderGroupBlock(title, lines) {
+  const kv = [];
+  const prose = [];
+  lines.forEach((l) => {
+    const pairs = parseFieldPairs(l);
+    if (pairs.length === 1) kv.push(pairs[0]);
+    else if (pairs.length >= 2) kv.push(...pairs.filter(([, v]) => String(v || '').trim()));
+    else if (l.trim()) prose.push(l.trim());
+  });
+  return `
+      <div class="relay-group">
+        <div class="relay-group-title">${esc(title)}</div>
+        ${renderKvList(kv)}
+        ${prose.length ? renderNarrative(prose.join('\n')) : ''}
+      </div>`;
+}
+
 function renderRowTables(lines) {
+  const pure = lines.map((l) => String(l || '')).filter((l) => l.trim());
+  const md = parseMdTable(pure);
+  const rest = md ? pure.filter((l) => !/^\s*\|/.test(l)) : pure.slice();
+  let html = '';
+  if (md) {
+    const maps = md.rows.map((r) => {
+      const o = {};
+      md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
+      return o;
+    });
+    const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
+    if (blank) html += `<div class="text-block">无</div>`;
+    else {
+      if (md.headers.some((h) => /停电日期|故障原因/.test(h))) html += weekCaption(maps);
+      html += renderDataTable(md.headers, maps);
+    }
+  }
+
   const records = [];
   const singles = [];
+  const narratives = [];
   const groups = [];
   let curGroup = null;
   const flush = () => {
@@ -671,73 +840,30 @@ function renderRowTables(lines) {
     curGroup = null;
   };
 
-  for (const l of lines) {
-    const kvs = [];
-    const re = /([^：\s\t]{1,20})：([^\s：\t]*)/g;
-    let mm;
-    let copy = l;
-    while ((mm = re.exec(copy)) !== null) kvs.push([mm[1], mm[2]]);
-    // 分组标题行：以冒号结尾且冒号后无内容（如 “变电运维班：” “配抢值班：” “汇报领导:”）
+  for (const l of rest) {
     const trimmed = l.trim();
+    // 分组标题行：以冒号结尾且冒号后无内容（如 “变电运维班：” “配抢值班：” “汇报领导:”）
     if (/^(?!\d+[、\.]|[一二三四五六七八九十]+[、\.])[^：:]{1,20}[：:]\s*$/.test(trimmed)) {
       flush();
       curGroup = { title: trimmed.replace(/[：:]\s*$/, '').trim(), lines: [] };
       continue;
     }
-    if (curGroup) { curGroup.lines.push(l); continue; }
-    if (kvs.length >= 2) records.push({ raw: l, kvs });
-    else singles.push(l);
+    if (curGroup) { curGroup.lines.push(trimmed); continue; }
+    const pairs = parseFieldPairs(trimmed);
+    if (pairs.length >= 2) records.push(pairs);
+    else if (pairs.length === 1) singles.push(pairs[0]);
+    else narratives.push(trimmed);
   }
   flush();
 
-  let html = '';
   if (records.length) {
     const headers = [];
-    records.forEach((r) => r.kvs.forEach(([k]) => headers.includes(k) || headers.push(k)));
-    const prioritize = ['杆号区段', '起始点', '所在林区', '终止点', '穿越长度kM', '通道长度公里', '隐患类型', '备注', '区段描述', '其他隐患描述'];
-    headers.sort((a, b) => {
-      const ia = prioritize.indexOf(a), ib = prioritize.indexOf(b);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-    });
-    html += `<table class="dt"><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>`;
-    html += records.map((r) => {
-      const map = {};
-      r.kvs.forEach(([k, v]) => (map[k] = v));
-      return `<tr>${headers.map((h) => `<td>${esc(map[h] != null ? map[h] : '')}</td>`).join('')}</tr>`;
-    }).join('');
-    html += '</tbody></table>';
-    html += `<details class="raw-inline"><summary>该章节接口原始行（共 ${records.length} 条）</summary><pre>${records.map((r) => esc(r.raw)).join('\n')}</pre></details>`;
+    records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
+    html += renderDataTable(headers, records.map(pairsToMap));
   }
-  if (singles.length) {
-    // 散行中“键：值”形式的整齐成条目，纯文本（如“无”）仍用文本块
-    const kvItems = [];
-    const plain = [];
-    singles.forEach((l) => {
-      const m = l.trim().match(/^([^：:]{1,20})[：:]\s*(.+)$/);
-      if (m) kvItems.push([m[1].trim(), m[2].trim()]);
-      else plain.push(l);
-    });
-    if (kvItems.length) {
-      html += `<div class="relay-list">${kvItems.map(([k, v]) => `<div class="relay-item"><span class="relay-name">${esc(k)}</span><b class="relay-val">${esc(v)}</b></div>`).join('')}</div>`;
-    }
-    if (plain.length) {
-      html += `<div class="text-block">${plain.map((l) => esc(l)).join('<br/>')}</div>`;
-    }
-  }
-  if (groups.length) {
-    html += groups.map((g) => `
-      <div class="relay-group">
-        <div class="relay-group-title">${esc(g.title)}</div>
-        <div class="relay-list">
-          ${g.lines.map((l) => {
-            const m = l.trim().match(/^([^：:]{1,20})[：:]\s*(.+)$/);
-            return m
-              ? `<div class="relay-item"><span class="relay-name">${esc(m[1].trim())}</span><b class="relay-val">${esc(m[2].trim())}</b></div>`
-              : `<div class="relay-item relay-full">${esc(l)}</div>`;
-          }).join('')}
-        </div>
-      </div>`).join('');
-  }
+  if (singles.length) html += renderKvList(singles);
+  if (narratives.length) html += renderNarrative(narratives.join('\n'));
+  if (groups.length) html += groups.map((g) => renderGroupBlock(g.title, g.lines)).join('');
   return html;
 }
 
@@ -775,6 +901,7 @@ const CSS = `
     radial-gradient(700px 420px at 10% 0%, rgba(74,130,240,.28), transparent 55%),
     linear-gradient(120deg,#041a3e 0%,#0d3f96 45%,#1d5fd0 82%,#0b2c66 100%); box-shadow:0 18px 60px rgba(0,0,0,.55); position:relative; overflow:hidden; border:1px solid rgba(140,180,255,.20); }
   .hero::after { content:""; position:absolute; left:0; right:0; bottom:0; height:4px; background:linear-gradient(90deg,#1d5fd0,#6bb3ff,#9cc6ff); }
+  .hero-kicker { display:inline-block; font-size:12px; font-weight:800; letter-spacing:2px; padding:3px 12px; border-radius:99px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); margin-bottom:10px; }
   .hero h1 { font-size:32px; font-weight:800; letter-spacing:-.4px; text-shadow:0 2px 14px rgba(0,0,0,.35); }
   .hero .meta { margin-top:14px; display:flex; gap:10px 26px; flex-wrap:wrap; font-size:13px; color:rgba(255,255,255,.92); }
   .hero .meta span { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.24); padding:4px 12px; border-radius:99px; backdrop-filter:blur(4px); }
@@ -792,11 +919,11 @@ const CSS = `
   .kpi-value { font-size:21px; font-weight:800; letter-spacing:-.3px; }
   .kpi-label { font-size:12.5px; color:var(--sub); margin-top:4px; }
   /* 通用卡片 */
-  .card { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; margin-top:16px; border:1px solid var(--line); }
+  .card { background:linear-gradient(180deg,var(--card2),var(--card)); border-radius:var(--r); box-shadow:var(--sh1); overflow:hidden; scroll-margin-top:96px; margin-top:16px; border:1px solid var(--line); min-width:0; }
   .card-head { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,rgba(25,42,70,.9),rgba(12,22,42,.85)); }
   .card-badge { background:linear-gradient(135deg,var(--deep),var(--e-blue)); color:#fff; font-size:12px; font-weight:700; border-radius:99px; padding:3px 11px; min-width:32px; text-align:center; box-shadow:0 3px 10px rgba(59,130,246,.35); }
   .card-head h2 { font-size:16px; font-weight:700; color:#fff; }
-  .card-body { padding:6px 22px 20px; }
+  .card-body { padding:14px 22px 18px; }
   .text-block { background:rgba(19,35,60,.55); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-top:12px; color:var(--ink); }
   /* 接口档案内的分组面板（如变电运维班 / 配抢值班 / 汇报领导） */
   .relay-group { margin-top:12px; background:linear-gradient(180deg,rgba(18,34,64,.65),rgba(10,18,36,.55)); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:14px; padding:12px 14px 14px; }
@@ -827,9 +954,12 @@ const CSS = `
   .tf-caption b { display:block; color:#fff; font-size:16px; font-weight:700; margin-top:2px; }
   .kv-table { margin-top:6px; }
   /* 表格 */
-  table.dt { width:100%; border-collapse:collapse; font-size:13.5px; margin:6px 0 4px; }
-  table.dt th { color:#fff; background:linear-gradient(135deg,#1c2c48,#2a4068); font-weight:650; font-size:12.5px; text-align:left; padding:9px 12px; border:none; white-space:nowrap; }
-  table.dt td { padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-all; color:var(--ink); }
+  .table-wrap { width:100%; max-width:100%; min-width:0; overflow-x:auto; margin-top:8px; }
+  .narrative { margin-top:8px; background:rgba(19,35,60,.55); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:12px; padding:12px 14px; white-space:pre-wrap; word-break:break-word; line-height:1.75; font-size:14px; color:var(--ink); }
+  .week-cap { margin:4px 0 8px; font-size:12.5px; line-height:1.5; color:#d7e6ff; background:rgba(59,130,246,.12); border:1px solid rgba(120,170,255,.35); border-radius:10px; padding:8px 12px; }
+  table.dt { width:max-content; min-width:100%; border-collapse:collapse; font-size:13.5px; margin:0; }
+  table.dt th { color:#fff; background:linear-gradient(135deg,#1c2c48,#2a4068); font-weight:650; font-size:12.5px; text-align:left; padding:9px 12px; border:none; white-space:normal; line-height:1.35; }
+  table.dt td { padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-word; overflow-wrap:anywhere; color:var(--ink); }
   table.dt tbody tr:nth-child(even) td { background:rgba(19,35,60,.4); }
   table.dt tbody tr:last-child td { border-bottom:none; }
   /* kv 卡片 */
@@ -887,10 +1017,10 @@ const CSS = `
   /* 占满屏幕 + 不同分辨率自适应（侧列宽度随屏宽缩放、标题字号 clamp） */
   .screen { height:100vh; max-width:none; margin:0; padding:14px 18px 16px; display:flex; flex-direction:column; }
   .screen-head { flex:none; text-align:center; padding:6px 0 12px; }
-  .screen-title { font-size:clamp(22px,2.3vw,34px); font-weight:800; letter-spacing:6px; background:linear-gradient(90deg,#00F0FF,#1E90FF); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 18px rgba(0,240,255,.28)); }
-  .screen-sub { margin-top:6px; font-size:12.5px; color:var(--b-dim); letter-spacing:2px; }
-  /* 按内容量分配版面：左右列各 30%（供电所概况/试拉建议+信息同步），中间 40%（合并核心 + 线路详情） */
-  .screen-grid { flex:1; min-height:0; display:grid; grid-template-columns:clamp(300px,30%,540px) minmax(0,1fr) clamp(300px,30%,540px); grid-template-rows:minmax(0,1fr); gap:14px; }
+  .screen-title { font-size:clamp(20px,2.1vw,32px); font-weight:800; letter-spacing:.4px; line-height:1.3; background:linear-gradient(90deg,#00F0FF,#1E90FF); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 18px rgba(0,240,255,.28)); }
+  .screen-sub { margin-top:6px; font-size:12.5px; color:var(--b-dim); letter-spacing:.4px; line-height:1.45; }
+  /* 线路详情最宽；中间放母线与供电所；右侧放试拉和信息同步 */
+  .screen-grid { flex:1; min-height:0; display:grid; grid-template-columns:minmax(360px,1.35fr) minmax(280px,0.95fr) minmax(280px,0.85fr); grid-template-rows:minmax(0,1fr); gap:14px; }
   /* 左列：线路详情（吃满高度）+ 候选线路（按内容自适应） */
   .col { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
   /* 中列：合并核心模块（上）+ 供电所概况（下，宽列联系人两列排布） */
@@ -898,7 +1028,7 @@ const CSS = `
   /* 右列：试拉建议（吃满高度）+ 信息同步（收尾，放最后，按内容自适应） */
   .col-r { display:grid; grid-template-rows:minmax(0,1fr) auto; gap:14px; min-height:0; }
   /* 模块：半透明深蓝玻璃质感 + 青色细边 + 四角科技感直角装饰 */
-  .panel { background:var(--b-mod); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid var(--b-bord); border-radius:6px; box-shadow:0 10px 30px rgba(0,0,0,.4); padding:12px 14px 14px; display:flex; flex-direction:column; min-height:0; overflow:hidden; position:relative; }
+  .panel { background:var(--b-mod); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid var(--b-bord); border-radius:6px; box-shadow:0 10px 30px rgba(0,0,0,.4); padding:12px 14px 14px; display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden; position:relative; }
   .panel::before { content:""; position:absolute; top:-1px; left:50%; transform:translateX(-50%); width:48%; height:2px; background:linear-gradient(90deg,transparent,#00F0FF,#1E90FF,transparent); }
   .panel::after { content:""; position:absolute; inset:0; pointer-events:none; border-radius:6px; background:
     linear-gradient(var(--b-cyan),var(--b-cyan)) top left / 16px 2px,
@@ -913,8 +1043,9 @@ const CSS = `
   /* 模块标题：左侧 3px 青色竖条、靠左 */
   .panel-title { font-size:15px; font-weight:700; color:#fff; text-align:left; letter-spacing:2px; display:flex; align-items:center; gap:9px; margin-bottom:10px; flex-shrink:0; }
   .panel-title::before { content:""; width:3px; height:16px; background:var(--b-cyan); box-shadow:0 0 8px var(--b-cyan); flex-shrink:0; }
-  .panel-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:5px; scrollbar-width:none; -ms-overflow-style:none; }
-  .panel-body::-webkit-scrollbar { display:none; }  /* 隐藏滚动条，保留滚轮/触摸板滚动 */
+  .panel-body { flex:1; min-height:0; min-width:0; overflow:auto; padding-right:5px; scrollbar-width:thin; scrollbar-color:rgba(0,240,255,.45) transparent; }
+  .panel-body::-webkit-scrollbar { width:8px; height:8px; }
+  .panel-body::-webkit-scrollbar-thumb { background:rgba(0,240,255,.4); border-radius:8px; }
   /* 空数据提示 */
   .empty-hint { height:100%; min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--b-dim); font-size:13px; letter-spacing:1px; }
   .empty-hint .eh-ico { font-size:26px; color:rgba(0,240,255,.45); line-height:1; }
@@ -924,8 +1055,10 @@ const CSS = `
   .line-select option { background:#0B1221; color:#eaffff; }
   /* 线路详情：容器不滚、每条线路各自内滚（固定高度模块） */
   .line-detail-wrap { overflow:hidden; display:flex; flex-direction:column; padding-right:0; }
-  .line-detail { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:5px; scrollbar-width:none; -ms-overflow-style:none; }
-  .line-detail::-webkit-scrollbar { display:none; }
+  .line-detail { flex:1; min-height:0; min-width:0; overflow:auto; padding-right:5px; scrollbar-width:thin; scrollbar-color:rgba(0,240,255,.45) transparent; }
+  .line-detail::-webkit-scrollbar { width:8px; height:8px; }
+  .line-detail::-webkit-scrollbar-thumb { background:rgba(0,240,255,.4); border-radius:8px; }
+  .ld-value { font-size:14px; font-weight:700; color:#fff; padding:0 2px 6px 11px; line-height:1.45; }
   /* 线路详情子小节 */
   .ld-sub { margin-bottom:12px; }
   .ld-sub:last-child { margin-bottom:0; }
@@ -934,9 +1067,9 @@ const CSS = `
   .ld-seg { background:rgba(8,16,32,.55); border:1px solid var(--b-bord); border-radius:8px; padding:8px 11px; margin-bottom:7px; }
   .ld-seg:last-child { margin-bottom:0; }
   .ld-seg-title { font-size:13px; font-weight:700; color:#cfefff; margin-bottom:5px; }
-  .ld-row { display:flex; gap:9px; font-size:12px; line-height:1.6; padding:1.5px 0; }
-  .ld-row span { color:var(--b-dim); flex-shrink:0; min-width:60px; }
-  .ld-row b { color:var(--b-ink2); font-weight:650; word-break:break-all; }
+  .ld-row { display:flex; gap:9px; font-size:12px; line-height:1.55; padding:3px 0; align-items:flex-start; }
+  .ld-row span { color:var(--b-dim); flex:0 0 5.6em; }
+  .ld-row b { color:var(--b-ink2); font-weight:650; word-break:break-word; overflow-wrap:anywhere; }
   .ld-text { font-size:12px; color:var(--b-dim); line-height:1.6; padding:0 2px 0 11px; word-break:break-all; }
   /* 中上核心模块（母线接地信息 + 三相电压定位）：两块内容纵向堆叠，整体溢出时内滚 */
   .core-body { display:flex; flex-direction:column; gap:13px; }
@@ -1007,7 +1140,11 @@ const CSS = `
   body.bus-screen .adv-item { font-size:13px; }
   /* 候选线路：竖向列表，线路名左·序号右，更整齐 */
   body.bus-screen .line-tags { flex-direction:column; align-items:stretch; gap:9px; }
-  body.bus-screen .line-tag { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  body.bus-screen .line-tag { display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; }
+  body.bus-screen .line-tag small { display:block; margin-left:auto; text-align:right; white-space:nowrap; }
+  body.bus-screen .week-cap { color:#d7fbff; background:rgba(0,240,255,.08); border-color:rgba(0,240,255,.28); }
+  body.bus-screen .narrative { background:rgba(8,16,32,.55); border-color:var(--b-bord); border-left-color:var(--b-cyan); color:var(--b-ink2); word-break:normal; overflow-wrap:anywhere; }
+  body.bus-screen .table-wrap { margin-top:4px; }
   /* 窄屏回退：堆叠为单列、允许页面滚动 */
   @media (max-width:1120px){
     body.bus-screen { height:auto; min-height:100vh; overflow:auto; }
@@ -1027,45 +1164,77 @@ function buildHtml({ query, answer, typeSections }) {
     typeSections.find((s) => s.type === mainType) || { type: mainType, text: String(query).trim() };
   const typeCards = mainSection.text ? renderTypeDetail(mainSection, answer) : '';
 
-  // 接口返回档案完整展示
+  // 接口档案按「日报通报 / 周报历史 / 线路档案」拆开，避免混在同一串卡片里
   const answerSections = parseAnswerSections(answer);
-  let answerBlocks = '';
-  if (answerSections.length > 0) {
-    answerBlocks = answerSections
-      .map((s, i) => {
-        // 用户要求：首段标题统一为“供电所名称和变电运维班”
-        let title = s.title;
-        if (/^供电所名称/.test(title)) title = '供电所名称和变电运维班';
-        return `
+  const sectionKind = (title) => {
+    if (/信息同步/.test(title)) return 'daily';
+    if (/故障信息|历史故障|周报/.test(title)) return 'weekly';
+    return 'archive';
+  };
+  const sectionBody = (title, lines) => {
+    const meaningful = lines.map((l) => String(l).trim()).filter(Boolean);
+    if (meaningful.length === 1 && /^无$/.test(meaningful[0])) return `<div class="text-block">无</div>`;
+    if (
+      meaningful.length === 1
+      && !meaningful[0].startsWith('|')
+      && !parseFieldPairs(meaningful[0]).length
+    ) {
+      const label = /供电所名称/.test(title) ? '供电所名称' : title;
+      return `<div class="kv2"><div class="kv2-item"><span>${esc(label)}</span><b>${esc(meaningful[0])}</b></div></div>`;
+    }
+    return renderRowTables(lines);
+  };
+  const cardsOf = (list) => list.map((s, i) => `
       <section class="card">
-        <div class="card-head"><span class="card-badge">${esc(String(i + 1).padStart(2, '0'))}</span><h2>${esc(title)}</h2></div>
-        <div class="card-body">${renderRowTables(s.lines)}</div>
-      </section>`;
-      })
-      .join('');
-  } else {
+        <div class="card-head"><span class="card-badge">${esc(String(i + 1).padStart(2, '0'))}</span><h2>${esc(s.title)}</h2></div>
+        <div class="card-body">${sectionBody(s.title, s.lines)}</div>
+      </section>`).join('');
+  const dailySecs = answerSections.filter((s) => sectionKind(s.title) === 'daily');
+  const weekSecs = answerSections.filter((s) => sectionKind(s.title) === 'weekly');
+  const archiveSecs = answerSections.filter((s) => sectionKind(s.title) === 'archive');
+  let dailyBlocks = cardsOf(dailySecs);
+  let weekBlocks = cardsOf(weekSecs);
+  let answerBlocks = cardsOf(archiveSecs);
+  if (!answerSections.length) {
     const emptyNotice = answer
       ? ''
-      : `<div class="text-block" style="border:1px solid rgba(255,200,100,.35);background:rgba(255,180,60,.08);color:#f0d08a;">接口本次调用未返回数据（上游工作流偶发空返回，已自动重试）。以下“接口返回”区域留空，故障针对性分析已根据您提交的故障信息完整列出。</div>`;
+      : `<div class="text-block" style="border:1px solid rgba(255,200,100,.35);background:rgba(255,180,60,.08);color:#f0d08a;">接口本次调用未返回数据（上游工作流偶发空返回，已自动重试）。以下档案区留空，故障针对性分析已根据您提交的故障信息完整列出。</div>`;
     answerBlocks = `<section class="card"><div class="card-head"><span class="card-badge">01</span><h2>接口返回全文</h2></div><div class="card-body">${emptyNotice || `<div class="text-block">${esc(answer)}</div>`}</div></section>`;
   }
+  if (!weekBlocks) {
+    weekBlocks = `<section class="card"><div class="card-head"><span class="card-badge">—</span><h2>历史故障</h2></div><div class="card-body"><div class="text-block">档案未单列历史故障，本周报无条目。</div></div></section>`;
+  }
 
-  // KPI 提取（优先从接口返回 answer，缺失时回退到用户提交的 fault 文本）
+  // KPI：跳闸看动作与损失；接地看相别和三相电压。不再把跳闸字段套到接地日报上。
   const src = answer || query;
+  const qkv = extractKV(query);
+  const eventTime = findEventTime(`${query}\n${answer}`);
   const kpiLine = (src.match(/(10kV|20kV|35kV|110kV)/) || [''])[0] || '—';
   const kpiStation = ((src.match(/([\u4e00-\u9fa5]{2,8})站/) || ['', ''])[1] ? (src.match(/([\u4e00-\u9fa5]{2,8})站/)[1] + '站') : '—');
   let kpiLoss = (src.match(/损失[\s\S]{0,6}电流[^0-9]{0,6}([0-9.\-]+)\s*A?/) || ['', '—'])[1] || '—';
   if (/^[\d.\-]+$/.test(kpiLoss)) kpiLoss += ' A';
   const kpiPre = (src.match(/跳闸前[^，,]{0,10}(有接地|无接地|有|无)/) || ['', '—'])[1] || '—';
-  const kpiType = mainType;
+  const phase = qkv['接地相别'] || (String(query).match(/接地相别[：:]\s*(\S+)/) || [])[1] || '—';
+  const kpiRows = mainType === '跳闸'
+    ? [
+      ['故障类型', mainType],
+      ['厂站名称', kpiStation === '站' ? '—' : kpiStation],
+      ['电压等级', kpiLine],
+      ['动作时间', eventTime || qkv['动作时间'] || '—'],
+      ['损失电流', kpiLoss],
+      ['跳闸前接地', kpiPre],
+    ]
+    : [
+      ['故障类型', mainType],
+      ['厂站名称', kpiStation === '站' ? '—' : kpiStation],
+      ['电压等级', kpiLine],
+      ['接地相别', phase],
+      ['Ua', qkv['Ua'] || '—'],
+      ['Ub', qkv['Ub'] || '—'],
+      ['Uc', qkv['Uc'] || '—'],
+    ];
 
-  const kpiCards = [
-    ['故障类型', kpiType],
-    ['厂站名称', kpiStation === '站' ? '—' : kpiStation],
-    ['电压等级', kpiLine],
-    ['损失电流', kpiLoss],
-    ['跳闸前接地', kpiPre],
-  ]
+  const kpiCards = kpiRows
     .map(
       ([k, v]) => `
     <div class="kpi">
@@ -1076,11 +1245,13 @@ function buildHtml({ query, answer, typeSections }) {
     .join('');
 
   const navItems = [
-    ['overview', '总览'],
-    [`type-${mainType}`, mainType],
-    ['answer', '接口返回'],
-    ['raw', '原始全文'],
-  ];
+    ['overview', '日报'],
+    [`type-${mainType}`, '本次'],
+    ['daily-sync', '信息同步'],
+    ['weekly', '周报'],
+    ['answer', '线路档案'],
+    ['raw', '原文'],
+  ].filter(([id]) => id !== 'daily-sync' || dailyBlocks);
 
   const lineName =
     (String(answer || query).match(/([\u4e00-\u9fa5A-Za-z0-9]{0,20})?10kV[a-zA-Z0-9\u4e00-\u9fa5-]*/) || [''])[0] ||
@@ -1106,9 +1277,10 @@ function buildHtml({ query, answer, typeSections }) {
 
   <div class="wrap">
     <div class="hero" id="overview">
-      <h1>${esc(lineName)} · 故障分析看板</h1>
+      <div class="hero-kicker">日报</div>
+      <h1>${esc(lineName)} · ${esc(mainType)}</h1>
       <div class="meta">
-        <span><b>数据来源：</b>接口实时返回原文</span>
+        <span><b>事件时间：</b>${esc(eventTime || '未标注')}</span>
         <span><b>生成时间：</b>${todayTime()}</span>
         <span><b>故障类型：</b>${mainType}</span>
       </div>
@@ -1117,18 +1289,30 @@ function buildHtml({ query, answer, typeSections }) {
     <div class="kpi-grid">${kpiCards}</div>
 
     <div class="sec">
-      <div class="sec-title" id="types">故障针对性分析</div>
-      <div class="sec-note">已按输入识别为「${mainType}」，展示对应专属模板</div>
+      <div class="sec-title" id="types">日报 · 本次故障</div>
+      <div class="sec-note">只放本次${mainType}，不把历史故障或线路台账混进这一段</div>
       ${typeCards}
     </div>
 
+    ${dailyBlocks ? `<div class="sec" id="daily-sync">
+      <div class="sec-title">日报 · 信息同步</div>
+      <div class="sec-note">通报正文按原句展示，时间不再拆成字段</div>
+      ${dailyBlocks}
+    </div>` : ''}
+
+    <div class="sec" id="weekly">
+      <div class="sec-title">周报 · 历史故障</div>
+      <div class="sec-note">近三年故障按自然周归集；没有日期的记为无条目</div>
+      ${weekBlocks}
+    </div>
+
     <div class="sec">
-      <div class="sec-title" id="answer">接口返回完整档案</div>
-      <div class="sec-note">智能体接口返回内容，完整展示、未作修改</div>
+      <div class="sec-title" id="answer">线路与联系人</div>
+      <div class="sec-note">供电所、林区与密集通道，供查阅，不重复贴在日报正文里</div>
       ${answerBlocks}
     </div>
 
-    <details class="rawbox" id="raw" open>
+    <details class="rawbox" id="raw">
       <summary>接口返回原始全文（一字未改，共 ${String(answer).length} 字）</summary>
       <pre>${answer ? esc(answer) : '（接口本次未返回数据）'}</pre>
     </details>
@@ -1186,7 +1370,7 @@ async function main() {
     html = buildHtml({ query, answer: '', typeSections });
   }
 
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const date = todayCompact();
   const mainType = pickMain(query);
   const fileName = `故障信息分析看板_${mainType}_${date}.html`;
   ensureOutDir();
