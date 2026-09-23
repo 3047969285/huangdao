@@ -1,11 +1,11 @@
 /**
- * 黄岛-故障信息分析助手 - HTML 看板生成脚本 v5（统一栅格 · 三类型独立看板）
+ * 黄岛-故障信息分析助手 - HTML 看板生成脚本 v6（监测大屏 · 1920×1080 一屏铺满）
  * ==========================================
  * 用途：
  *   1. 调用 chat API 获取故障分析原始返回（复用 index.js 的 callChat）
  *   2. 将 接口返回的原始 answer 一字不差地完整展示（不脱敏 / 不修改 / 不删减）
  *   3. 跳闸 / 接地 / 母线接地三套独立模板，**按输入识别出的类型只渲染对应的那一种**
- *   4. 跳闸/单线接地/母线多线三套独立模板，统一栅格卡片密度
+ *   4. 跳闸/单线接地/母线多线三套独立模板，监测大屏：深藏青底、发光描边、标题分段面板
  *   5. 配色：深蓝电力主题（主色深蓝，仅低压相警示红），苹果简约设计
  *
  * 用法：
@@ -256,16 +256,267 @@ function phaseLabel(s) {
   return m ? m[1].toUpperCase() + '相' : '?';
 }
 
+function numOf(v) {
+  const m = /([\d.]+)/.exec(String(v));
+  return m ? parseFloat(m[1]) : null;
+}
 
-// ---------------- 统一栅格看板 v5 ----------------
+// ---------------- 监测大屏 v6（1920×1080 一屏铺满） ----------------
+
+function ringGauge(label, value, maxVal) {
+  const n = numOf(value);
+  const pct = n == null ? 0 : Math.max(0, Math.min(100, Math.round((n / (maxVal || 10)) * 100)));
+  const low = n != null && n < 2;
+  const r = 36;
+  const c = 2 * Math.PI * r;
+  const dash = (pct / 100) * c;
+  const col = low ? '#ff4d6a' : '#00e5ff';
+  return `<div class="ring-box${low ? ' low' : ''}"><svg viewBox="0 0 88 88" class="ring-svg"><circle cx="44" cy="44" r="${r}" class="ring-track"/><circle cx="44" cy="44" r="${r}" class="ring-arc" stroke="${col}" stroke-dasharray="${dash.toFixed(1)} ${(c - dash).toFixed(1)}" transform="rotate(-90 44 44)"/></svg><div class="ring-center"><b style="color:${col}">${esc(value || '—')}</b><span>${esc(label)}</span></div></div>`;
+}
+
+function statChip(label, value) {
+  return `<div class="stat-chip"><div class="sc-val">${esc(value || '—')}</div><div class="sc-lbl">${esc(label)}</div></div>`;
+}
+
+function hBarRow(label, val, max) {
+  const n = numOf(val);
+  const pct = n == null ? 8 : Math.max(8, Math.min(100, Math.round((n / (max || 1)) * 100)));
+  const short = String(label || '').length > 24 ? String(label).slice(0, 22) + '…' : label;
+  return `<div class="hbar"><span class="hb-lbl" title="${esc(label)}">${esc(short)}</span><div class="hb-track"><div class="hb-fill" style="width:${pct}%"></div></div><span class="hb-val">${esc(val)}</span></div>`;
+}
+
+function compactList(pairs) {
+  if (!pairs.length) return '<div class="empty">无</div>';
+  return `<div class="clist">${pairs.map(([k, v]) => `<div class="cl-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+}
+
+function renderTrialList(lines) {
+  const items = lines.map((l) => l.trim()).filter(Boolean);
+  if (!items.length) return '<div class="empty">无</div>';
+  let html = '';
+  items.forEach((t) => {
+    const isHead = !/^\d/.test(t) && /优先|其次|最后|协商|无穿越/.test(t);
+    if (isHead) { html += `<div class="trial-head">${esc(t)}</div>`; return; }
+    const m = t.match(/^(\d+)[.、\s]+(.+)$/);
+    const n = m ? m[1] : '';
+    const body = m ? m[2] : t;
+    const pct = m ? Math.max(20, 100 - (parseInt(n, 10) - 1) * 16) : 50;
+    html += `<div class="trial-row"><span class="trial-n">${esc(n || '·')}</span><div class="trial-bar"><div class="trial-fill" style="width:${pct}%"></div></div><span class="trial-txt">${esc(body)}</span></div>`;
+  });
+  return html;
+}
+
+function renderForestBars(lines) {
+  const records = [];
+  lines.forEach((l) => { const pairs = parseFieldPairs(l); if (pairs.length >= 2) records.push(pairsToMap(pairs)); });
+  if (!records.length) {
+    const t = lines.map((l) => l.trim()).filter(Boolean);
+    if (t.length === 1 && /^无$/.test(t[0])) return '<div class="empty">无</div>';
+    return t.length ? `<div class="narr">${esc(t.join('\\n'))}</div>` : '<div class="empty">无</div>';
+  }
+  const maxLen = Math.max(...records.map((r) => numOf(r['穿越长度kM'] || r['通道长度公里']) || 0.1), 0.5);
+  return records.map((r) => {
+    const lbl = r['杆号区段'] || r['起始点'] || r['区段描述'] || '区段';
+    const val = r['穿越长度kM'] || r['通道长度公里'] || '—';
+    const disp = String(val).includes('km') ? val : `${val}km`;
+    return hBarRow(lbl, disp, maxLen);
+  }).join('');
+}
+
+function renderSectionBody(title, lines) {
+  const pure = lines.map((l) => String(l || '').trim()).filter(Boolean);
+  if (!pure.length) return '<div class="empty">无</div>';
+  if (/试拉/.test(title)) return renderTrialList(pure);
+  if (/信息同步/.test(title)) return `<div class="narr sync-txt">${esc(pure.join('\\n'))}</div>`;
+  if (/穿越林区|密集通道/.test(title)) return renderForestBars(pure);
+  if (/联系人|概况/.test(title)) return renderRowTables(pure);
+  if (/故障信息/.test(title)) {
+    const md = parseMdTable(pure);
+    if (md) {
+      const maps = md.rows.map((r) => { const o = {}; md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; }); return o; });
+      if (maps.every((r) => md.headers.every((h) => isBlankCell(r[h])))) return '<div class="empty">无</div>';
+      return renderRecordCards(md.headers, maps);
+    }
+    if (pure.length === 1 && /^无$/.test(pure[0])) return '<div class="empty">无</div>';
+  }
+  if (pure.length === 1 && /^无$/.test(pure[0])) return '<div class="empty">无</div>';
+  const pairs = [];
+  pure.forEach((l) => { const ps = parseFieldPairs(l); if (ps.length === 1) pairs.push(ps[0]); });
+  if (pairs.length) return compactList(pairs);
+  const tbl = renderRowTables(pure);
+  return tbl || `<div class="narr">${esc(pure.join('\\n'))}</div>`;
+}
+
+function renderBlockBody(block) {
+  if (/\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(block.title)) {
+    const body = renderLineDetail(block.lines);
+    return body || renderSectionBody(block.title, block.lines);
+  }
+  return renderSectionBody(block.title, block.lines);
+}
+
+function mkPanel(title, body, col, row) {
+  const cs = col || 1;
+  const rs = row || 1;
+  return `<div class="panel" style="grid-column:span ${cs};grid-row:span ${rs}"><div class="panel-h"><i></i>${esc(title)}</div><div class="panel-b">${body || '<div class="empty">无</div>'}</div></div>`;
+}
+
+function buildKpiStrip(query, answer, mainType) {
+  const rows = buildKpiRows(query, answer, mainType);
+  return `<div class="kpi-strip">${rows.map(([k, v]) => statChip(k, v)).join('')}</div>`;
+}
+
+function buildTripFlow(query) {
+  const kv = extractKV(query);
+  const steps = [['保护动作', kv['动作类型'] || '—'], ['跳闸前接地', kv['跳闸前接地情况'] || '—'], ['跳闸后复归', kv['跳闸后接地复归情况'] || '—'], ['损失电流', kv['损失负荷电流'] || '—']];
+  return `<div class="flow-4">${steps.map(([l, v], i) => `<div class="flow-step"><div class="fs-n">${i + 1}</div><div class="fs-v">${esc(v)}</div><div class="fs-l">${esc(l)}</div></div>`).join('')}</div>`;
+}
+
+function buildOcPanel(query) {
+  const kv = extractKV(query);
+  return compactList([['保护装置', kv['保护装置'] || '—'], ['动作类型', kv['动作类型'] || '—'], ['动作时间', kv['动作时间'] || '—'], ['动作值', kv['动作值'] || '—']]);
+}
+
+function buildVoltPanel(query) {
+  const kv = extractKV(query);
+  const text = String(query || '');
+  const ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
+  const ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
+  const uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
+  return `<div class="ring-row">${ringGauge('Ua', ua, 10)}${ringGauge('Ub', ub, 10)}${ringGauge('Uc', uc, 10)}</div>`;
+}
+
+function buildGroundInfo(query) {
+  const kv = extractKV(query);
+  return compactList([['接地相别', kv['接地相别'] || '—'], ['接地选线', kv['是否有接地选线'] || '—'], ['选线线路', kv['接地选线线路名称'] || '—'], ['瞬时接地', kv['是否瞬时接地'] || '—']]);
+}
+
+function buildBusMeta(query) {
+  const kv = extractKV(query);
+  const text = String(query || '');
+  const qval = (re) => (text.match(re) || [])[1] || '';
+  return compactList([
+    ['厂站', kv['厂站名称'] || qval(/厂站名称[：:]\s*(\S+)/) || '—'], ['母线', kv['母线名称'] || qval(/母线名称[：:]\s*(\S+)/) || '—'],
+    ['接地相别', kv['接地相别'] || qval(/接地相别[：:]\s*(\S+)/) || '—'], ['接地选线', kv['是否有接地选线'] || qval(/是否有接地选线[：:]\s*(\S+)/) || '—'],
+    ['选线线路', kv['接地选线线路名称'] || qval(/接地选线线路名称[：:]\s*([^\n]+)/) || '—'], ['瞬时接地', kv['是否瞬时接地'] || qval(/是否瞬时接地[：:]\s*(\S+)/) || '—'],
+  ]);
+}
+
+function buildCandPanel(query, answer) {
+  const kv = extractKV(query);
+  const names = collectCandidateLines(query, answer, kv, { forceScan: true });
+  if (!names.length) return '<div class="empty">无</div>';
+  return `<div class="tag-row">${names.map((l, i) => `<div class="ltag"><b>${esc(l)}</b><small>候选 ${i + 1}</small></div>`).join('')}</div>`;
+}
+
+function collectArchivePanels(answer, mainType) {
+  const panels = [];
+  if (mainType === '母线接地') {
+    parseAnswerBlocks(answer).forEach((b) => {
+      const t = b.title.replace(/^([一二三四五六七八九十]+)\s*[、\.]\s*/, '');
+      let c = 2, r = 1;
+      if (/概况/.test(t)) { c = 2; r = 2; }
+      else if (/10kV/.test(t)) { c = 2; r = 2; }
+      else if (/试拉/.test(t)) { c = 3; r = 2; }
+      else if (/信息同步/.test(t)) { c = 3; r = 2; }
+      panels.push({ title: t, body: renderBlockBody(b), c, r });
+    });
+    return panels;
+  }
+  parseAnswerSections(answer).forEach((s) => {
+    if (mainType === '跳闸' && /试拉/.test(s.title)) return;
+    let c = 2, r = 1;
+    if (/联系人/.test(s.title)) { c = 2; r = 2; }
+    else if (/穿越|密集/.test(s.title)) { c = 3; r = 2; }
+    else if (/信息同步|试拉/.test(s.title)) { c = 3; r = 2; }
+    panels.push({ title: s.title, body: renderSectionBody(s.title, s.lines), c, r });
+  });
+  return panels;
+}
+
+function collectDailyPanels(query, answer, mainType) {
+  if (mainType === '跳闸') {
+    return [
+      { title: '跳闸过程', body: buildTripFlow(query), c: 4, r: 2 },
+      { title: '过流动作', body: buildOcPanel(query), c: 2, r: 2 },
+    ];
+  }
+  if (mainType === '接地') {
+    return [
+      { title: '三相电压', body: buildVoltPanel(query), c: 3, r: 2 },
+      { title: '接地信息', body: buildGroundInfo(query), c: 3, r: 1 },
+    ];
+  }
+  return [
+    { title: '母线接地信息', body: buildBusMeta(query), c: 2, r: 1 },
+    { title: '三相电压定位', body: buildVoltPanel(query), c: 2, r: 1 },
+    { title: '候选线路', body: buildCandPanel(query, answer), c: 2, r: 1 },
+  ];
+}
+
+// 按段名切分 query（跳闸 / 接地 / 母线接地）
+function parseQuerySections(query) {
+  const q = String(query || '');
+  const sections = [];
+  const parts = q.split(/^\s*(母线接地|接地|跳闸)\s*[：:]/m);
+  for (let i = 1; i < parts.length; i += 2) {
+    const type = parts[i];
+    const body = String(parts[i + 1] || '').trim();
+    if (body) sections.push({ type, text: body });
+  }
+  if (sections.length === 0 && q.trim()) {
+    let type = '跳闸';
+    if (/母线接地/.test(q)) type = '母线接地';
+    else if (/接地/.test(q)) type = '接地';
+    sections.push({ type, text: q.trim() });
+  }
+  return sections;
+}
+
+// 根据输入判定主故障类型（一个看板只对应一种类型的模板）
+function pickMain(query) {
+  const q = String(query || '').trim();
+  // 优先识别行首“跳闸：/接地：/母线接地：”段落头（避免正文里“跳闸前接地”等干扰）
+  const head = q.match(/^\s*(母线接地|接地|跳闸)\s*[：:]/m);
+  if (head) return head[1];
+  if (/母线接地/.test(q)) return '母线接地';
+  if (/接地/.test(q)) return '接地';
+  return '跳闸';
+}
+
+// 解析一段 kv（支持 “键：值” 与 “键：值  键2：值2” 多空行）
+function extractKV(text) {
+  const kv = {};
+  const lines = String(text || '').split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.trim().replace(/\u00a0/g, ' ');
+    if (!line) continue;
+    if (/^(母线接地|接地|跳闸)\s*[：:]?$/.test(line)) continue;
+    const m = line.match(/^([^：:：\t]{1,20})[：:]\s*(.+)$/);
+    if (m) {
+      const key = m[1].trim();
+      const val = m[2].trim();
+      if (key && !(key in kv)) kv[key] = val;
+      continue;
+    }
+    const parts = line.split(/ {2,}|\t+/).filter(Boolean);
+    for (const p of parts) {
+      const mm = p.match(/^([^：:：\t]{1,20})[：:]\s*(.+)$/);
+      if (mm) kv[mm[1].trim()] = mm[2].trim();
+    }
+  }
+  return kv;
+}
+
+// 从相别值里抽取单相标识（“C相”/“C”/“C相接地” → “C相”）
+function phaseLabel(s) {
+  const m = /([ABCabc])\s*相?/.exec(String(s || ''));
+  return m ? m[1].toUpperCase() + '相' : '?';
+}
+
 
 /**
- * 从 query / 接口返回收集候选线路名（去重；排除母线本体；过滤「否」等非线路值）。
- * @param {string} text
- * @param {string} [extraText]
- * @param {Record<string, string>} [kv]
- * @param {{ forceScan?: boolean }} [opts]
- * @returns {string[]}
+ * 从 query / 接口返回收集候选线路名。
  */
 function collectCandidateLines(text, extraText, kv, opts) {
   const forceScan = !!(opts && opts.forceScan);
@@ -297,220 +548,6 @@ function collectCandidateLines(text, extraText, kv, opts) {
     });
   }
   return set;
-}
-
-function gCard(title, body, span) {
-  const cls = span ? `g-card span-${span}` : 'g-card';
-  return `<div class="${cls}"><div class="g-card-h">${esc(title)}</div><div class="g-card-b">${body || '<div class="empty">无</div>'}</div></div>`;
-}
-
-function gGrid(cards, extraClass) {
-  const cls = extraClass ? `g-grid ${extraClass}` : 'g-grid';
-  return `<div class="${cls}">${cards.filter(Boolean).join('')}</div>`;
-}
-
-function gSection(id, title, inner) {
-  return `<section class="g-sec" id="${esc(id)}"><div class="g-sec-t">${esc(title)}</div>${inner}</section>`;
-}
-
-function kvMini(rows) {
-  const items = rows.filter(([, v]) => v && String(v).trim() && v !== '—');
-  if (!items.length) return '<div class="empty">无</div>';
-  return `<div class="kv-mini">${items.map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
-}
-
-function numOf(v) {
-  const m = /([\d.]+)/.exec(String(v));
-  return m ? parseFloat(m[1]) : null;
-}
-
-function phasePct(v) {
-  const n = numOf(v);
-  if (n == null) return 3;
-  return Math.max(3, Math.min(100, Math.round((n / 5.8) * 100)));
-}
-
-function phaseCard(label, val) {
-  const n = numOf(val);
-  const low = n != null && n < 2;
-  return `<div class="phase-mini${low ? ' low' : ''}"><div class="pl">${esc(label)}</div><div class="phase-bar"><div class="phase-fill" style="width:${phasePct(val)}%"></div></div><div class="pv">${esc(val || '—')}</div></div>`;
-}
-
-function getAdviceBlock(answer) {
-  const blocks = parseAnswerBlocks(answer);
-  return blocks.find((b) => b.title === '试拉建议' || b.title.includes('试拉'));
-}
-
-function getSyncBlock(answer) {
-  const blocks = parseAnswerBlocks(answer);
-  return blocks.find((b) => b.title === '信息同步' || b.title.includes('信息同步'));
-}
-
-function adviceCards(answer) {
-  const block = getAdviceBlock(answer);
-  if (!block) return [];
-  const lines = block.lines.map((l) => l.trim()).filter(Boolean);
-  const cards = [];
-  let idx = 0;
-  lines.forEach((t) => {
-    const isHead = !/^\d/.test(t) && /优先|其次|最后|协商|无穿越/.test(t);
-    if (isHead) {
-      cards.push(gCard('试拉策略', `<div class="narr">${esc(t)}</div>`, 12));
-      return;
-    }
-    const m = t.match(/^(\d+)[.、\s]+(.+)$/);
-    idx += 1;
-    const n = m ? m[1] : String(idx);
-    const body = m ? m[2] : t;
-    cards.push(gCard(`优先级 ${n}`, `<div class="adv-row"><span class="adv-n">${esc(n)}</span><span>${esc(body)}</span></div>`));
-  });
-  return cards;
-}
-
-function syncCard(answer) {
-  const block = getSyncBlock(answer);
-  const lines = block ? block.lines.map((l) => l.trim()).filter(Boolean) : [];
-  const text = lines.length ? lines.join('\n') : '';
-  return gCard('信息同步', text ? `<div class="narr">${esc(text)}</div>` : '', 12);
-}
-
-function tripDailyCards(query, answer) {
-  const kv = extractKV(query);
-  const steps = [
-    ['保护动作', kv['动作类型'] || '—'],
-    ['跳闸前接地', kv['跳闸前接地情况'] || '—'],
-    ['跳闸后复归', kv['跳闸后接地复归情况'] || '—'],
-    ['损失电流', kv['损失负荷电流'] || '—'],
-  ];
-  const flow = steps.map(([l, v], i) => `<div class="trip-step"><div class="n">${i + 1}</div><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join('');
-  const oc = kvMini([
-    ['保护装置', kv['保护装置'] || ''], ['动作类型', kv['动作类型'] || ''],
-    ['动作时间', kv['动作时间'] || ''], ['动作值', kv['动作值'] || ''],
-  ]);
-  return [
-    gCard('跳闸过程', `<div class="inner-4">${flow}</div>`, 8),
-    gCard('过流动作', oc, 4),
-    syncCard(answer),
-  ];
-}
-
-function groundDailyCards(query, answer, withTrial) {
-  const kv = extractKV(query);
-  const text = String(query || '');
-  const ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
-  const ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
-  const uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;]+)/.exec(text)?.[1] || '';
-  const meta = kvMini([
-    ['接地相别', kv['接地相别'] || '—'],
-    ['接地选线', kv['是否有接地选线'] || '—'],
-    ['选线线路', kv['接地选线线路名称'] || '—'],
-    ['瞬时接地', kv['是否瞬时接地'] || '—'],
-  ]);
-  const cards = [
-    gCard('Ua', phaseCard('Ua', ua)),
-    gCard('Ub', phaseCard('Ub', ub)),
-    gCard('Uc', phaseCard('Uc', uc)),
-    gCard('接地信息', meta, 6),
-    syncCard(answer),
-  ];
-  if (withTrial) cards.splice(4, 0, ...adviceCards(answer));
-  return cards;
-}
-
-function busDailyCards(query, answer) {
-  const kv = extractKV(query);
-  const qRaw = String(query || '');
-  const qval = (re) => (qRaw.match(re) || [])[1] || '';
-  const ua = kv['Ua'] || qval(/Ua[：:]\s*([^\s，,；;（(]+)/) || '';
-  const ub = kv['Ub'] || qval(/Ub[：:]\s*([^\s，,；;（(]+)/) || '';
-  const uc = kv['Uc'] || qval(/Uc[：:]\s*([^\s，,；;（(]+)/) || '';
-  const meta = kvMini([
-    ['厂站', kv['厂站名称'] || qval(/厂站名称[：:]\s*(\S+)/) || '—'],
-    ['母线', kv['母线名称'] || qval(/母线名称[：:]\s*(\S+)/) || '—'],
-    ['接地相别', kv['接地相别'] || qval(/接地相别[：:]\s*(\S+)/) || '—'],
-    ['接地选线', kv['是否有接地选线'] || qval(/是否有接地选线[：:]\s*(\S+)/) || '—'],
-    ['选线线路', kv['接地选线线路名称'] || qval(/接地选线线路名称[：:]\s*([^\n]+)/) || '—'],
-    ['瞬时接地', kv['是否瞬时接地'] || qval(/是否瞬时接地[：:]\s*(\S+)/) || '—'],
-  ]);
-  const lineNames = collectCandidateLines(query, answer, kv, { forceScan: true });
-  const lineCards = lineNames.map((l, i) => gCard(`候选 ${i + 1}`, `<div class="line-chip">${esc(l)}</div>`));
-  return [
-    gCard('母线接地', meta, 6),
-    gCard('Ua', phaseCard('Ua', ua)),
-    gCard('Ub', phaseCard('Ub', ub)),
-    gCard('Uc', phaseCard('Uc', uc)),
-    ...lineCards,
-    ...adviceCards(answer),
-    syncCard(answer),
-  ];
-}
-
-function weeklyCards(answer, mainType) {
-  const cards = [];
-  if (mainType === '母线接地') {
-    const blocks = parseAnswerBlocks(answer);
-    const lineBlocks = blocks.filter((b) => /\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(b.title));
-    lineBlocks.forEach((b) => {
-      const items = b.lines.map((l) => l.trim()).filter(Boolean);
-      const md = parseMdTable(items);
-      if (!md) return;
-      const maps = md.rows.map((r) => {
-        const o = {};
-        md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
-        return o;
-      }).filter((r) => md.headers.some((h) => !isBlankCell(r[h])));
-      if (!maps.length || maps.every((r) => md.headers.every((h) => isBlankCell(r[h])))) return;
-      const body = `${weekCaption(maps)}${renderRecordCards(md.headers, maps)}`;
-      cards.push(gCard(`周报 · ${b.title}`, body, 4));
-    });
-    if (!cards.length) cards.push(gCard('历史故障', '<div class="empty">本周报无条目</div>', 4));
-    return cards;
-  }
-  const sections = parseAnswerSections(answer);
-  const weekSecs = sections.filter((s) => /故障信息|历史故障|近三年/.test(s.title));
-  weekSecs.forEach((s) => {
-    const items = s.lines.map((l) => l.trim()).filter(Boolean);
-    const md = parseMdTable(items);
-    if (md) {
-      const maps = md.rows.map((r) => {
-        const o = {};
-        md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
-        return o;
-      }).filter((r) => md.headers.some((h) => !isBlankCell(r[h]) && !/^(无|—)$/.test(String(r[h]).trim())));
-      if (maps.length) {
-        cards.push(gCard(`周报 · ${s.title}`, `${weekCaption(maps)}${renderRecordCards(md.headers, maps)}`, 4));
-        return;
-      }
-    }
-    if (items.length === 1 && /^无$/.test(items[0])) return;
-    if (items.length) cards.push(gCard(`周报 · ${s.title}`, `<div class="narr">${esc(items.join('\n'))}</div>`, 4));
-  });
-  if (!cards.length) cards.push(gCard('历史故障', '<div class="empty">本周报无条目</div>', 4));
-  return cards;
-}
-
-function archiveCards(answer, mainType) {
-  const cards = [];
-  if (mainType === '母线接地') {
-    const blocks = parseAnswerBlocks(answer);
-    const supply = blocks.find((b) => b.title === '供电所概况' || b.title.includes('供电所概况'));
-    if (supply) cards.push(gCard('供电所概况', renderRowTables(supply.lines), 6));
-    const lineBlocks = blocks.filter((b) => /\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(b.title));
-    lineBlocks.forEach((b) => {
-      const body = renderLineDetail(b.lines) || '<div class="empty">无</div>';
-      cards.push(gCard(b.title, body, 6));
-    });
-    return cards.length ? cards : [gCard('线路档案', '<div class="empty">无</div>', 6)];
-  }
-  const sections = parseAnswerSections(answer);
-  const archiveSecs = sections.filter((s) => !/信息同步|试拉|故障信息|历史故障/.test(s.title));
-  archiveSecs.forEach((s) => {
-    const body = renderRowTables(s.lines) || '<div class="empty">无</div>';
-    const span = /联系人|穿越|密集/.test(s.title) ? 6 : 4;
-    cards.push(gCard(s.title, body, span));
-  });
-  if (!cards.length) cards.push(gCard('线路档案', '<div class="empty">无</div>', 6));
-  return cards;
 }
 
 function buildKpiRows(query, answer, mainType) {
@@ -652,188 +689,6 @@ function renderLineDetail(lines) {
   return `<div class="ld-wrap">${segHtml}</div>`;
 }
 
-// 大屏渲染：左中右三列，左右各 2 模块，中间上大块 + 下左右两块
-function renderBusScreen(query, answer) {
-  const kv = extractKV(query);
-  const numOf = (v) => { const m = /([\d.]+)/.exec(String(v)); return m ? parseFloat(m[1]) : null; };
-  const phasePct = (v) => { const n = numOf(v); if (n == null) return 3; return Math.max(3, Math.min(100, Math.round((n / 5.8) * 100))); };
-
-  let ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;（(]+)/.exec(query)?.[1] || '';
-  let ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;（(]+)/.exec(query)?.[1] || '';
-  let uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;（(]+)/.exec(query)?.[1] || '';
-  // 字段提取：优先 kv（多行），回退正则（单行空格分隔也可靠）——保证通用模板单/多行都展示
-  const qRaw = String(query || '');
-  const qval = (re) => (qRaw.match(re) || [])[1] || '';
-  const station = kv['厂站名称'] || qval(/厂站名称[：:]\s*(\S+)/);
-  const busName = kv['母线名称'] || qval(/母线名称[：:]\s*(\S+)/);
-  const phase = kv['接地相别'] || qval(/接地相别[：:]\s*(\S+)/);
-  const hasSel = kv['是否有接地选线'] || qval(/是否有接地选线[：:]\s*(\S+)/);
-  const selLine = kv['接地选线线路名称'] || qval(/接地选线线路名称[：:]\s*(\S+)/);
-  const instant = kv['是否瞬时接地'] || qval(/是否瞬时接地[：:]\s*(\S+)/);
-
-  const blocks = parseAnswerBlocks(answer);
-  const getBlock = (kw) => blocks.find((b) => b.title === kw) || blocks.find((b) => b.title.includes(kw));
-  const lineBlocks = blocks.filter((b) => /\d+kV[\u4e00-\u9fa5A-Za-z0-9]*线/.test(b.title));
-  const supplyBlock = getBlock('供电所概况');
-  const adviceBlock = getBlock('试拉建议');
-  const syncBlock = getBlock('信息同步');
-
-  const emptyHtml = `<div class="empty-hint"><span class="eh-ico">∅</span>暂无数据</div>`;
-
-  // 三相电压
-  const phaseHtml = (label, val) => {
-    const n = numOf(val);
-    // 与定位结论一致：低压相阈值 <2kV
-    const cls = n != null && n < 2 ? 'low' : 'ok';
-    const vcol = cls === 'low' ? '#ff4d5e' : '#00F0FF';
-    return `
-      <div class="phase ${cls}">
-        <div class="phase-label">${label}</div>
-        <div class="phase-bar"><div class="phase-fill" style="width:${phasePct(val)}%"></div></div>
-        <div class="phase-val" style="color:${vcol}">${esc(val || '—')}</div>
-      </div>`;
-  };
-  const uaN = numOf(ua), ubN = numOf(ub), ucN = numOf(uc);
-  const lowPhase = (uaN != null && uaN < 2) ? 'A相' : (ubN != null && ubN < 2) ? 'B相' : (ucN != null && ucN < 2) ? 'C相' : '';
-  const lowVal = lowPhase === 'A相' ? ua : lowPhase === 'B相' ? ub : lowPhase === 'C相' ? uc : '';
-  const voltNote = lowPhase
-    ? `<div class="volt-note">三相电压中 <b>${lowPhase} = ${esc(lowVal)}</b> 显著低于正常相（约 5.8kV） → 疑似 <b>${esc(phaseLabel(phase))}母线接地</b></div>`
-    : (ua || ub || uc) ? `<div class="volt-note ok">三相电压分布：Ua ${esc(ua)} / Ub ${esc(ub)} / Uc ${esc(uc)}（均正常）</div>` : '';
-  const voltHtml = (ua || ub || uc)
-    ? `<div class="volt-wrap">${phaseHtml('Ua', ua)}${phaseHtml('Ub', ub)}${phaseHtml('Uc', uc)}</div>${voltNote}`
-    : emptyHtml;
-
-  // 母线接地信息
-  const metaRows = [
-    ['厂站名称', station], ['母线名称', busName], ['接地相别', phase],
-    ['是否有接地选线', hasSel], ['接地选线线路名称', selLine], ['是否瞬时接地', instant],
-  ].filter(([, v]) => v);
-  const metaHtml = metaRows.length
-    ? `<div class="kv2">${metaRows.map(([k, v]) => `<div class="kv2-item"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`
-    : emptyHtml;
-
-  // 试拉建议
-  const advLines = adviceBlock ? adviceBlock.lines.map((l) => l.trim()).filter(Boolean) : [];
-  const adviceHtml = advLines.length
-    ? `<div class="adv-list">${advLines.map((t) => {
-        const isHead = !/^\d/.test(t) && /优先|其次|最后|协商|无穿越/.test(t);
-        return `<div class="adv-item${isHead ? ' head' : ''}">${esc(t)}</div>`;
-      }).join('')}</div>`
-    : emptyHtml;
-
-  // 信息同步
-  const syncLines = syncBlock ? syncBlock.lines.map((l) => l.trim()).filter(Boolean) : [];
-  const syncHtml = syncLines.length
-    ? `<div class="narrative">${esc(syncLines.join('\n'))}</div>`
-    : emptyHtml;
-
-  // 供电所概况
-  const supplyLines = supplyBlock ? supplyBlock.lines.filter((l) => l.trim()) : [];
-  const supplyHtml = supplyLines.length ? renderRowTables(supplyLines) : emptyHtml;
-
-  // 候选线路：章节标题 + query/answer 全文扫描（含「是否有接地选线：否」仍列出的线路）
-  const lineNamesFromBlocks = lineBlocks.map((b) => b.title);
-  const lineNames = (() => {
-    const scanned = collectCandidateLines(query, answer, kv, { forceScan: true });
-    const merged = [];
-    lineNamesFromBlocks.concat(scanned).forEach((n) => {
-      if (n && !merged.includes(n)) merged.push(n);
-    });
-    return merged;
-  })();
-  const candHtml = lineNames.length
-    ? `<div class="line-tags">${lineNames.map((l, i) => {
-        const isMain = /\d+kV/.test(l);
-        return `<div class="line-tag ${isMain ? 'main' : 'branch'}">${esc(l)}<small>候选线路 ${i + 1}</small></div>`;
-      }).join('')}</div>`
-    : emptyHtml;
-
-  // 线路详情（左上选择器切换）
-  const lineDetails = lineBlocks.map((b, i) => {
-    const has = b.lines.filter((l) => l.trim()).length > 0;
-    return `<div class="line-detail" id="lineDetail${i}"${i === 0 ? '' : ' style="display:none"'}>${has ? renderLineDetail(b.lines) || emptyHtml : emptyHtml}</div>`;
-  }).join('');
-  const lineSelectHtml = lineBlocks.length
-    ? `<select class="line-select" id="lineSelect">${lineBlocks.map((b, i) => `<option value="${i}">${esc(b.title)}</option>`).join('')}</select>
-       <div class="panel-body line-detail-wrap">${lineDetails}</div>`
-    : `<div class="panel-body">${emptyHtml}</div>`;
-
-  const eventTime = findEventTime(`${answer}\n${query}`);
-  const title = `${esc(station)} ${esc(busName)} 母线接地分析大屏`;
-  const sub = `日报 · 母线接地 · 接地相别 ${esc(phase)}${eventTime ? ` · 事件时间 ${esc(eventTime)}` : ''} · 生成 ${todayTime()}`;
-
-  return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>${title}</title>
-<style>${CSS}</style>
-</head>
-<body class="bus-screen">
-  <div class="screen">
-    <div class="screen-head">
-      <div class="screen-title">${title}</div>
-      <div class="screen-sub">${sub}</div>
-    </div>
-    <div class="screen-grid">
-      <!-- 左列：线路详情（上，吃满高度）+ 候选线路（按内容自适应） -->
-      <div class="col">
-        <div class="panel">
-          <div class="panel-title">线路详情（选择线路）</div>
-          ${lineSelectHtml}
-        </div>
-        <div class="panel">
-          <div class="panel-title">候选线路（接地选线）</div>
-          <div class="panel-body">${candHtml}</div>
-        </div>
-      </div>
-      <!-- 中列：合并核心模块（母线接地信息 + 三相电压定位）+ 供电所概况（下，宽列联系人两列排布） -->
-      <div class="col-mid">
-        <div class="panel">
-          <div class="panel-title">母线接地信息 · 三相电压定位</div>
-          <div class="panel-body core-body">${metaHtml}${voltHtml}</div>
-        </div>
-        <div class="panel">
-          <div class="panel-title">供电所概况</div>
-          <div class="panel-body">${supplyHtml}</div>
-        </div>
-      </div>
-      <!-- 右列：试拉建议（吃满高度）+ 信息同步（收尾，放在最后） -->
-      <div class="col-r">
-        <div class="panel">
-          <div class="panel-title">试拉建议</div>
-          <div class="panel-body">${adviceHtml}</div>
-        </div>
-        <div class="panel">
-          <div class="panel-title">信息同步</div>
-          <div class="panel-body">${syncHtml}</div>
-        </div>
-      </div>
-    </div>
-  </div>
-  <script>
-  (function(){
-    // 线路选择器切换（切换后滚动位置归零）
-    var sel = document.getElementById('lineSelect');
-    if (sel) {
-      sel.addEventListener('change', function(){
-        var items = document.querySelectorAll('.line-detail');
-        for (var i=0;i<items.length;i++){ items[i].style.display = 'none'; items[i].scrollTop = 0; }
-        var t = document.getElementById('lineDetail' + sel.value);
-        if (t) t.style.display = 'block';
-      });
-    }
-    // 模块内容仅手动滚动（滚轮/触摸板/触摸），不做自动流转
-  })();
-  </script>
-</body>
-</html>`;
-}
-
-// ---------------- 接口档案 ----------------
-
-// 解析接口 answer 为章节
 function parseAnswerSections(answer) {
   const lines = String(answer || '').split(/\r?\n/);
   const sections = [];
@@ -843,8 +698,6 @@ function parseAnswerSections(answer) {
     if (!line.trim()) continue;
     const m = line.match(/^([一二三四五六七八九十0-9]+)[、\.]\s*(.+)$/);
     if (m) {
-      // 标题若在同一行内带出内容（如“二、供电所联系人和电话：张 剑：13xxxxxxxxx”），
-      // 拆出标题与这段内容，内容并入该章节正文顶部，避免被吞进标题。
       let title = m[2].trim().replace(/[：:]\s*$/, '');
       let extra = '';
       const tm = title.match(/^(.+?)[：:]\s*(\S.*)$/);
@@ -866,7 +719,7 @@ function renderKvList(pairs) {
 function renderNarrative(text) {
   const t = String(text || '').trim();
   if (!t) return '';
-  return `<div class="narrative">${esc(t)}</div>`;
+  return `<div class="narr">${esc(t)}</div>`;
 }
 
 function renderGroupBlock(title, lines) {
@@ -878,12 +731,7 @@ function renderGroupBlock(title, lines) {
     else if (pairs.length >= 2) kv.push(...pairs.filter(([, v]) => String(v || '').trim()));
     else if (l.trim()) prose.push(l.trim());
   });
-  return `
-      <div class="relay-group">
-        <div class="relay-group-title">${esc(title)}</div>
-        ${renderKvList(kv)}
-        ${prose.length ? renderNarrative(prose.join('\n')) : ''}
-      </div>`;
+  return `<div class="relay-group"><div class="relay-group-title">${esc(title)}</div>${renderKvList(kv)}${prose.length ? renderNarrative(prose.join('\n')) : ''}</div>`;
 }
 
 function renderRowTables(lines) {
@@ -898,13 +746,9 @@ function renderRowTables(lines) {
       return o;
     });
     const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
-    if (blank) html += `<div class="text-block">无</div>`;
-    else {
-      if (md.headers.some((h) => /停电日期|故障原因/.test(h))) html += weekCaption(maps);
-      html += renderDataTable(md.headers, maps);
-    }
+    if (blank) html += '<div class="empty">无</div>';
+    else html += renderDataTable(md.headers, maps);
   }
-
   const records = [];
   const singles = [];
   const narratives = [];
@@ -914,10 +758,8 @@ function renderRowTables(lines) {
     if (curGroup && curGroup.lines.length) groups.push(curGroup);
     curGroup = null;
   };
-
   for (const l of rest) {
     const trimmed = l.trim();
-    // 分组标题行：以冒号结尾且冒号后无内容（如 “变电运维班：” “配抢值班：” “汇报领导:”）
     if (/^(?!\d+[、\.]|[一二三四五六七八九十]+[、\.])[^：:]{1,20}[：:]\s*$/.test(trimmed)) {
       flush();
       curGroup = { title: trimmed.replace(/[：:]\s*$/, '').trim(), lines: [] };
@@ -930,7 +772,6 @@ function renderRowTables(lines) {
     else narratives.push(trimmed);
   }
   flush();
-
   if (records.length) {
     const headers = [];
     records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
@@ -942,231 +783,116 @@ function renderRowTables(lines) {
   return html;
 }
 
-// 解析接口 answer 为章节
-function parseAnswerSections(answer) {
-  const lines = String(answer || '').split(/\r?\n/);
-  const sections = [];
-  let current = null;
-  for (const raw of lines) {
-    const line = raw.replace(/^\s+/, '').replace(/\s+$/, '');
-    if (!line.trim()) continue;
-    const m = line.match(/^([一二三四五六七八九十0-9]+)[、\.]\s*(.+)$/);
-    if (m) {
-      // 标题若在同一行内带出内容（如“二、供电所联系人和电话：张 剑：13xxxxxxxxx”），
-      // 拆出标题与这段内容，内容并入该章节正文顶部，避免被吞进标题。
-      let title = m[2].trim().replace(/[：:]\s*$/, '');
-      let extra = '';
-      const tm = title.match(/^(.+?)[：:]\s*(\S.*)$/);
-      if (tm) { title = tm[1].trim(); extra = tm[2]; }
-      current = { title, lines: extra ? [extra] : [] };
-      sections.push(current);
-    } else if (current) {
-      current.lines.push(line);
-    }
-  }
-  return sections;
-}
-
-function renderKvList(pairs) {
-  if (!pairs.length) return '';
-  return `<div class="relay-list">${pairs.map(([k, v]) => `<div class="relay-item"><span class="relay-name">${esc(k)}</span><b class="relay-val">${esc(v)}</b></div>`).join('')}</div>`;
-}
-
-function renderNarrative(text) {
-  const t = String(text || '').trim();
-  if (!t) return '';
-  return `<div class="narrative">${esc(t)}</div>`;
-}
-
-function renderGroupBlock(title, lines) {
-  const kv = [];
-  const prose = [];
-  lines.forEach((l) => {
-    const pairs = parseFieldPairs(l);
-    if (pairs.length === 1) kv.push(pairs[0]);
-    else if (pairs.length >= 2) kv.push(...pairs.filter(([, v]) => String(v || '').trim()));
-    else if (l.trim()) prose.push(l.trim());
-  });
-  return `
-      <div class="relay-group">
-        <div class="relay-group-title">${esc(title)}</div>
-        ${renderKvList(kv)}
-        ${prose.length ? renderNarrative(prose.join('\n')) : ''}
-      </div>`;
-}
-
-function renderRowTables(lines) {
-  const pure = lines.map((l) => String(l || '')).filter((l) => l.trim());
-  const md = parseMdTable(pure);
-  const rest = md ? pure.filter((l) => !/^\s*\|/.test(l)) : pure.slice();
-  let html = '';
-  if (md) {
-    const maps = md.rows.map((r) => {
-      const o = {};
-      md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; });
-      return o;
-    });
-    const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
-    if (blank) html += `<div class="text-block">无</div>`;
-    else {
-      if (md.headers.some((h) => /停电日期|故障原因/.test(h))) html += weekCaption(maps);
-      html += renderDataTable(md.headers, maps);
-    }
-  }
-
-  const records = [];
-  const singles = [];
-  const narratives = [];
-  const groups = [];
-  let curGroup = null;
-  const flush = () => {
-    if (curGroup && curGroup.lines.length) groups.push(curGroup);
-    curGroup = null;
-  };
-
-  for (const l of rest) {
-    const trimmed = l.trim();
-    // 分组标题行：以冒号结尾且冒号后无内容（如 “变电运维班：” “配抢值班：” “汇报领导:”）
-    if (/^(?!\d+[、\.]|[一二三四五六七八九十]+[、\.])[^：:]{1,20}[：:]\s*$/.test(trimmed)) {
-      flush();
-      curGroup = { title: trimmed.replace(/[：:]\s*$/, '').trim(), lines: [] };
-      continue;
-    }
-    if (curGroup) { curGroup.lines.push(trimmed); continue; }
-    const pairs = parseFieldPairs(trimmed);
-    if (pairs.length >= 2) records.push(pairs);
-    else if (pairs.length === 1) singles.push(pairs[0]);
-    else narratives.push(trimmed);
-  }
-  flush();
-
-  if (records.length) {
-    const headers = [];
-    records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
-    html += renderDataTable(headers, records.map(pairsToMap));
-  }
-  if (singles.length) html += renderKvList(singles);
-  if (narratives.length) html += renderNarrative(narratives.join('\n'));
-  if (groups.length) html += groups.map((g) => renderGroupBlock(g.title, g.lines)).join('');
-  return html;
-}
-
-
-// ---------------- HTML 组装（统一栅格） ----------------
+// ---------------- HTML 组装（监测大屏） ----------------
 
 const CSS = `
-  :root{--bg:#050b16;--card:#0e1a30;--card2:#132038;--ink:#e8f0fc;--sub:#8ea3c0;--line:rgba(120,170,255,.14);--blue:#3b82f6;--cyan:#5ec8ff;--red:#ff5a4e;--r:14px}
+  :root{--bg:#06101f;--panel:#0a1628;--ink:#e6f4ff;--sub:#7a9ec4;--cyan:#00e5ff;--line:rgba(0,229,255,.35);--glow:rgba(0,229,255,.15);--red:#ff4d6a;--r:6px}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(900px 420px at 10% -8%,rgba(59,130,246,.12),transparent 55%),radial-gradient(900px 420px at 90% 0%,rgba(29,95,208,.1),transparent 55%),var(--bg);color:var(--ink);line-height:1.55;-webkit-font-smoothing:antialiased}
-  .dash{max-width:1240px;margin:0 auto;padding:16px 18px 64px}
-  .dash-h{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 0 14px;border-bottom:1px solid var(--line);margin-bottom:14px}
-  .dash-h h1{font-size:22px;font-weight:800;letter-spacing:-.3px}
-  .dash-h .sub{font-size:12px;color:var(--sub);margin-top:4px}
-  .dash-h .meta{display:flex;gap:8px;flex-wrap:wrap}
-  .pill{font-size:12px;padding:4px 10px;border-radius:99px;background:rgba(59,130,246,.14);border:1px solid rgba(120,170,255,.28);color:#d7e8ff}
-  .g-sec{margin-top:26px}
-  .g-sec-t{font-size:15px;font-weight:800;color:#fff;margin-bottom:12px;padding-left:10px;border-left:3px solid var(--blue)}
-  .g-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;align-items:stretch}
-  .g-card{grid-column:span 4;background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:var(--r);min-height:148px;display:flex;flex-direction:column;overflow:hidden}
-  .g-card.span-6{grid-column:span 6}.g-card.span-8{grid-column:span 8}.g-card.span-12{grid-column:span 12}
-  .g-card-h{padding:10px 14px;font-size:12.5px;font-weight:700;color:var(--cyan);border-bottom:1px solid var(--line);background:rgba(255,255,255,.03);flex-shrink:0}
-  .g-card-b{padding:12px 14px;flex:1;font-size:13px;line-height:1.55;overflow:auto}
-  .kpi .g-card{min-height:92px;grid-column:span 2}
-  .kpi .g-card-b{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center}
-  .kpi-val{font-size:19px;font-weight:800;color:var(--cyan);word-break:break-all}
-  .kpi-lbl{font-size:11px;color:var(--sub);margin-top:4px}
-  .empty{color:var(--sub);font-size:13px;text-align:center;padding:18px 0}
-  .kv-mini{display:grid;gap:7px}
-  .kv-mini div{display:flex;justify-content:space-between;gap:10px;font-size:12.5px}
-  .kv-mini span{color:var(--sub);flex-shrink:0}
-  .kv-mini b{color:#fff;font-weight:650;text-align:right;word-break:break-all}
-  .phase-mini{text-align:center}
-  .phase-mini .pl{font-size:12px;color:var(--sub);font-weight:700}
-  .phase-mini .pv{font-size:22px;font-weight:800;margin-top:6px;color:var(--cyan)}
-  .phase-mini.low .pv{color:var(--red)}
-  .phase-bar{height:5px;background:rgba(255,255,255,.08);border-radius:5px;margin:8px 0;overflow:hidden}
-  .phase-fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:5px}
-  .phase-mini.low .phase-fill{background:linear-gradient(90deg,var(--red),#ff8a5c)}
-  .inner-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-  .trip-step{text-align:center;padding:8px 4px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px}
-  .trip-step .n{width:26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:12px}
-  .trip-step .v{margin-top:8px;font-size:14px;font-weight:700;color:#fff;word-break:break-all}
-  .trip-step .l{font-size:11px;color:var(--sub);margin-top:2px}
-  .narr{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}
-  .adv-row{display:flex;align-items:flex-start;gap:6px}
-  .adv-n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-size:11px;font-weight:800;flex-shrink:0}
-  .line-chip{display:inline-block;padding:5px 12px;border-radius:8px;background:rgba(59,130,246,.12);border:1px solid rgba(120,170,255,.35);font-size:13px;font-weight:650}
-  .week-cap{margin-bottom:8px;font-size:12px;color:#d7e6ff;background:rgba(59,130,246,.1);border:1px solid rgba(120,170,255,.28);border-radius:8px;padding:7px 10px}
-  .ld-seg{background:rgba(8,16,32,.45);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:7px}
-  .ld-seg:last-child{margin-bottom:0}
-  .ld-row{display:flex;gap:8px;font-size:12px;line-height:1.5;padding:2px 0}
-  .ld-row span{color:var(--sub);flex:0 0 5.5em}
-  .ld-row b{color:var(--ink);font-weight:650;word-break:break-word}
-  .ld-sub{margin-bottom:10px}
-  .ld-sub-title{font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px;padding-left:8px;border-left:3px solid var(--blue)}
-  .ld-none,.ld-text,.ld-value{font-size:12px;color:var(--sub)}
-  .relay-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px}
-  .relay-item{display:flex;justify-content:space-between;gap:8px;background:rgba(8,16,32,.45);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px}
-  .relay-name{color:var(--sub)}.relay-val{color:var(--cyan);font-weight:650;text-align:right;word-break:break-all}
-  .relay-group{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:8px;background:rgba(8,16,32,.35)}
-  .relay-group-title{font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px}
-  .table-wrap{overflow-x:auto}
-  table.dt{width:100%;border-collapse:collapse;font-size:12px}
-  table.dt th{background:rgba(59,130,246,.15);color:#fff;text-align:left;padding:7px 9px}
-  table.dt td{padding:7px 9px;border-bottom:1px solid var(--line);word-break:break-word}
-  details.raw{margin-top:28px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
-  details.raw summary{cursor:pointer;padding:12px 14px;font-size:13px;font-weight:700;background:rgba(255,255,255,.04)}
-  details.raw pre{padding:12px 14px 16px;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all;color:#c5d6ea;max-height:320px;overflow:auto}
-  .foot{text-align:center;color:var(--sub);font-size:12px;margin-top:32px}
-  @media(max-width:960px){.g-card,.g-card.span-6,.g-card.span-8{grid-column:span 6}.kpi .g-card{grid-column:span 4}.inner-4{grid-template-columns:repeat(2,1fr)}}
-  @media(max-width:600px){.g-card,.g-card.span-6,.g-card.span-8,.kpi .g-card{grid-column:span 12}.inner-4{grid-template-columns:1fr}}
+  html,body{width:1920px;height:1080px;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,100,180,.25),transparent),linear-gradient(180deg,#040a14 0%,#06101f 40%,#050d18 100%);color:var(--ink);-webkit-font-smoothing:antialiased}
+  .screen{width:1920px;height:1080px;display:flex;flex-direction:column;padding:12px 16px 14px;gap:10px}
+  .screen-head{position:relative;text-align:center;padding:10px 0 8px;flex-shrink:0}
+  .screen-head::before,.screen-head::after{content:"";position:absolute;top:50%;width:28%;height:1px;background:linear-gradient(90deg,transparent,var(--cyan),transparent)}
+  .screen-head::before{left:2%}.screen-head::after{right:2%}
+  .screen-title{font-size:28px;font-weight:800;letter-spacing:4px;color:#fff;text-shadow:0 0 20px var(--glow),0 0 40px rgba(0,229,255,.2)}
+  .screen-sub{font-size:12px;color:var(--sub);margin-top:4px}
+  .screen-sub .time-keep{white-space:nowrap}
+  .kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;flex-shrink:0}
+  .stat-chip{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;text-align:center;box-shadow:0 0 12px var(--glow),inset 0 0 20px rgba(0,229,255,.03)}
+  .sc-val{font-size:16px;font-weight:800;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sc-lbl{font-size:10px;color:var(--sub);margin-top:2px}
+  .screen-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(6,1fr);grid-auto-rows:minmax(0,1fr);gap:10px}
+  .panel{background:linear-gradient(135deg,rgba(10,22,40,.95),rgba(6,16,31,.98));border:1px solid var(--line);border-radius:var(--r);box-shadow:0 0 16px var(--glow),inset 0 1px 0 rgba(0,229,255,.08);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel-h{flex-shrink:0;padding:8px 12px;font-size:13px;font-weight:700;color:var(--cyan);border-bottom:1px solid rgba(0,229,255,.2);display:flex;align-items:center;gap:8px;background:rgba(0,229,255,.04)}
+  .panel-h i{display:inline-block;width:3px;height:14px;background:var(--cyan);box-shadow:0 0 6px var(--cyan)}
+  .panel-b{flex:1;min-height:0;padding:10px 12px;font-size:12px;line-height:1.5;overflow:auto}
+  .empty{color:var(--sub);text-align:center;padding:16px 0;font-size:12px}
+  .narr{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6}
+  .sync-txt{font-size:12px;color:#d0e8ff}
+  .clist{display:flex;flex-direction:column;gap:4px}
+  .cl-row{display:flex;justify-content:space-between;gap:8px;padding:4px 6px;background:rgba(0,229,255,.04);border-radius:4px;font-size:11.5px}
+  .cl-row span{color:var(--sub);flex-shrink:0}
+  .cl-row b{color:#fff;font-weight:600;text-align:right;word-break:break-all}
+  .flow-4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;height:100%;align-content:center}
+  .flow-step{text-align:center;padding:10px 6px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.2);border-radius:var(--r)}
+  .fs-n{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#0088cc,var(--cyan));color:#001018;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:0 0 10px var(--glow)}
+  .fs-v{margin-top:8px;font-size:14px;font-weight:700;color:#fff}
+  .fs-l{font-size:10px;color:var(--sub);margin-top:2px}
+  .ring-row{display:flex;justify-content:space-around;align-items:center;height:100%;gap:8px}
+  .ring-box{position:relative;width:88px;height:88px}
+  .ring-svg{width:88px;height:88px}
+  .ring-track{fill:none;stroke:rgba(0,229,255,.12);stroke-width:8}
+  .ring-arc{fill:none;stroke-width:8;stroke-linecap:round;filter:drop-shadow(0 0 4px currentColor)}
+  .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring-center b{font-size:14px;font-weight:800}
+  .ring-center span{font-size:10px;color:var(--sub);margin-top:2px}
+  .hbar{display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center;margin-bottom:5px;font-size:11px}
+  .hb-lbl{color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hb-track{height:8px;background:rgba(0,229,255,.1);border-radius:4px;overflow:hidden}
+  .hb-fill{height:100%;background:linear-gradient(90deg,#0066aa,var(--cyan));border-radius:4px;box-shadow:0 0 6px var(--glow)}
+  .hb-val{color:var(--cyan);font-weight:700;font-size:10px;white-space:nowrap}
+  .trial-head{font-size:11px;color:var(--cyan);margin-bottom:6px;padding:4px 0}
+  .trial-row{display:grid;grid-template-columns:22px 1fr;gap:6px;align-items:center;margin-bottom:5px}
+  .trial-n{width:20px;height:20px;border-radius:50%;background:var(--cyan);color:#001018;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .trial-bar{grid-column:2;height:6px;background:rgba(0,229,255,.1);border-radius:3px;overflow:hidden}
+  .trial-fill{height:100%;background:linear-gradient(90deg,#0066aa,var(--cyan))}
+  .trial-txt{grid-column:2;font-size:10.5px;color:#c8dff5;line-height:1.4;margin-top:-2px;padding-bottom:4px}
+  .tag-row{display:flex;flex-wrap:wrap;gap:8px}
+  .ltag{padding:8px 12px;border:1px solid var(--line);border-radius:var(--r);background:rgba(0,229,255,.06);text-align:center;min-width:120px}
+  .ltag b{display:block;font-size:13px;color:#fff}
+  .ltag small{font-size:10px;color:var(--sub)}
+  .ld-seg{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:4px;padding:6px 8px;margin-bottom:5px}
+  .ld-row{display:flex;gap:6px;font-size:11px;padding:2px 0}
+  .ld-row span{color:var(--sub);flex:0 0 5em}
+  .ld-row b{color:var(--ink);font-weight:600;word-break:break-word}
+  .ld-sub{margin-bottom:8px}
+  .ld-sub-title{font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:4px;padding-left:6px;border-left:2px solid var(--cyan)}
+  .ld-none,.ld-text,.ld-value{font-size:11px;color:var(--sub)}
+  .relay-list{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}
+  .relay-item{display:flex;justify-content:space-between;gap:6px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:4px;padding:4px 8px;font-size:11px}
+  .relay-name{color:var(--sub)}.relay-val{color:var(--cyan);font-weight:600;text-align:right}
+  .relay-group{margin-top:6px;padding:6px 8px;border:1px solid rgba(0,229,255,.15);border-left:2px solid var(--cyan);border-radius:4px}
+  .relay-group-title{font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:4px}
+  table.dt{width:100%;border-collapse:collapse;font-size:10.5px}
+  table.dt th{background:rgba(0,229,255,.12);color:#fff;text-align:left;padding:4px 6px}
+  table.dt td{padding:4px 6px;border-bottom:1px solid rgba(0,229,255,.1);word-break:break-word}
+  .week-cap{display:none}
 `;
 
 function buildHtml({ query, answer }) {
   const mainType = pickMain(query);
   const eventTime = findEventTime(`${query}\n${answer}`);
-  const kpiRows = buildKpiRows(query, answer, mainType);
-  const kpiHtml = gGrid(kpiRows.map(([k, v]) => gCard(k, `<div class="kpi-val">${esc(v)}</div><div class="kpi-lbl">${esc(k)}</div>`)), 'kpi');
-
-  let dailyCards;
-  if (mainType === '跳闸') dailyCards = tripDailyCards(query, answer);
-  else if (mainType === '母线接地') dailyCards = busDailyCards(query, answer);
-  else dailyCards = groundDailyCards(query, answer, true);
-
-  const dailyHtml = gGrid(dailyCards);
-  const weeklyHtml = gGrid(weeklyCards(answer, mainType));
-  const archiveHtml = gGrid(archiveCards(answer, mainType));
-
-  const lineName = (String(answer || query).match(/(10kV|20kV|35kV|110kV)[\u4e00-\u9fa5A-Za-z0-9-]*/) || [''])[0] || '故障信息';
   const typeLabel = mainType === '接地' ? '单线接地' : mainType;
-  const title = `${esc(lineName)} · ${esc(typeLabel)}`;
-
+  const lineName = (String(answer || query).match(/(10kV|20kV|35kV|110kV)[\u4e00-\u9fa5A-Za-z0-9-]*/) || [''])[0] || '故障线路';
+  const title = mainType === '母线接地'
+    ? `${esc(extractKV(query)['厂站名称'] || '大珠山站')} ${esc(extractKV(query)['母线名称'] || '')} 母线接地监测大屏`
+    : `${esc(lineName)} ${esc(typeLabel)}监测大屏`;
+  const timeHtml = eventTime ? `<span class="time-keep">事件时间 ${esc(eventTime)}</span> · ` : '';
+  const daily = collectDailyPanels(query, answer, mainType);
+  const archive = collectArchivePanels(answer, mainType);
+  const syncIdx = archive.findIndex((p) => /信息同步/.test(p.title));
+  let ordered = daily.concat(archive);
+  if (syncIdx >= 0) {
+    const syncPanel = archive[syncIdx];
+    ordered = daily.concat(archive.filter((p) => !/信息同步/.test(p.title))).concat([syncPanel]);
+  }
+  const panelsHtml = ordered.map((p) => mkPanel(p.title, p.body, p.c, p.r)).join('');
+  const kpiHtml = buildKpiStrip(query, answer, mainType);
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>故障信息分析看板 · ${esc(typeLabel)}</title>
+<meta name="viewport" content="width=1920,height=1080"/>
+<title>${title}</title>
 <style>${CSS}</style>
 </head>
 <body>
-  <div class="dash">
-    <header class="dash-h">
-      <div><h1>${title}</h1><div class="sub">黄岛故障信息分析 · ${todayTime()}</div></div>
-      <div class="meta">
-        <span class="pill">${esc(typeLabel)}</span>
-        <span class="pill">${esc(eventTime || '事件时间未标注')}</span>
-      </div>
+  <div class="screen">
+    <header class="screen-head">
+      <div class="screen-title">${title}</div>
+      <div class="screen-sub">${timeHtml}黄岛故障信息分析 · ${todayTime()}</div>
     </header>
-    ${gSection('overview', '概览', kpiHtml)}
-    ${gSection('daily', '日报', dailyHtml)}
-    ${gSection('weekly', '周报', weeklyHtml)}
-    ${gSection('archive', '线路档案', archiveHtml)}
-    <details class="raw" id="raw">
-      <summary>接口返回原文（${String(answer).length} 字）</summary>
-      <pre>${answer ? esc(answer) : '（接口本次未返回数据）'}</pre>
-    </details>
-    <div class="foot">数据来源于智能体接口与用户提交故障信息 · 黄岛-故障信息分析助手</div>
+    ${kpiHtml}
+    <div class="screen-grid">${panelsHtml}</div>
   </div>
 </body>
 </html>`;
