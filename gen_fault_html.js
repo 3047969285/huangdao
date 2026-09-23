@@ -1,4 +1,4 @@
-/** 黄岛故障看板 v10：培小e满屏三栏壳（100% 视口撑满，23%|1fr|26%）。FAULT_SEED_FILE 可离线重渲染。 */
+/** 黄岛故障看板 v11：培小e满屏三栏 + ECharts 撑满面板。FAULT_SEED_FILE 可离线重渲染。 */
 const fs = require('fs');
 const path = require('path');
 const biz = require('./index.js'); // 复用 API 调用逻辑
@@ -278,80 +278,296 @@ function renderBlockBody(block) {
   return renderSectionBody(block.title, block.lines);
 }
 
-function mkPanel(title, body, opts) {
-  const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
-  const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
-  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="tbl">${body || '<div class="empty">无</div>'}</div></div></div>`;
+const chartInits = [];
+let chartSeq = 0;
+
+function resetCharts() {
+  chartInits.length = 0;
+  chartSeq = 0;
 }
 
-function renderColPanels(panels) {
-  return panels.map((p) => mkPanel(p.title, p.body, p.opts)).join('');
+function nextChartId(prefix) {
+  chartSeq += 1;
+  return `${prefix || 'c'}_${chartSeq}`;
 }
 
-function mergePanelsBlock(panels, blockTitle) {
-  if (!panels.length) return null;
-  if (panels.length === 1) return panels[0];
-  const body = panels.map((p) => `<div class="merge-seg"><div class="merge-h">${esc(p.title)}</div>${p.body}</div>`).join('');
-  return { title: blockTitle, body, opts: { em: `${panels.length}项`, flex: '1' } };
+function findSection(answer, re) {
+  const s = parseAnswerSections(answer).find((x) => re.test(x.title));
+  return s || { title: '—', lines: [] };
 }
 
-function mergeRightPanels(panels) {
-  const m = mergePanelsBlock(panels, '线路档案');
-  return m ? [m] : [];
+function findBlock(answer, re) {
+  const b = parseAnswerBlocks(answer).find((x) => re.test(x.title));
+  return b || { title: '—', lines: [] };
 }
 
-function distributePanels(panels) {
-  const left = [];
-  const center = [];
-  const right = [];
-  let sync = null;
-  panels.forEach((p) => {
-    if (/信息同步/.test(p.title)) {
-      sync = p;
+function shortLbl(s, n) {
+  const t = String(s || '').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function padBarSeries(cats, vals, minRows) {
+  const c = cats.slice();
+  const v = vals.slice();
+  while (c.length < minRows) {
+    c.push('');
+    v.push(0);
+  }
+  return { cats: c, vals: v };
+}
+
+function extractForestBarData(lines) {
+  const cats = [];
+  const vals = [];
+  lines.forEach((l) => {
+    const pairs = parseFieldPairs(l);
+    if (pairs.length >= 2) {
+      const m = pairsToMap(pairs);
+      const lbl = m['杆号区段'] || m['起始点'] || m['区段描述'] || '区段';
+      const raw = m['穿越长度kM'] || m['通道长度公里'] || '0';
+      cats.push(shortLbl(lbl, 14));
+      vals.push(numOf(raw) || 0.1);
       return;
     }
-    if (/跳闸过程|过流|三相电压|接地信息|母线接地/.test(p.title)) left.push(p);
-    else if (/穿越|密集|试拉/.test(p.title)) center.push(p);
-    else right.push(p);
+    const t = String(l || '').trim();
+    if (t && !/^无$/.test(t)) {
+      cats.push(shortLbl(t, 14));
+      vals.push(0.2);
+    }
   });
-  const centerOut = center.map((p, i) => ({
-    ...p,
-    opts: {
-      flex: center.length > 1 ? (i === 0 ? '1.25' : '1.35') : '1',
-      em: p.opts && p.opts.em,
-    },
-  }));
-  const leftTitle = /跳闸|过流/.test(left.map((p) => p.title).join('')) ? '跳闸概况' : (/电压|接地/.test(left.map((p) => p.title).join('')) ? '接地概况' : '母线概况');
-  const leftMerged = mergePanelsBlock(left, leftTitle);
+  if (!cats.length) return padBarSeries(['暂无数据'], [0], 5);
+  return padBarSeries(cats, vals, Math.max(5, cats.length));
+}
+
+function extractTrialBarData(lines) {
+  const cats = [];
+  const vals = [];
+  lines.forEach((l) => {
+    const t = String(l || '').trim();
+    if (!t || /优先|其次|最后|协商|无穿越/.test(t)) return;
+    const m = t.match(/^(\d+)[.、\s]+(.+)$/);
+    const body = m ? m[2] : t;
+    const km = (body.match(/([\d.]+)\s*(?:km|kM|公里)/i) || [])[1];
+    cats.push(shortLbl(body, 18));
+    vals.push(km ? parseFloat(km) : Math.max(0.3, 4 - (parseInt(m && m[1], 10) || 1) * 0.6));
+  });
+  if (!cats.length) return padBarSeries(['暂无试拉建议'], [0], 5);
+  return padBarSeries(cats, vals, Math.max(5, cats.length));
+}
+
+function buildHBarOption(cats, vals, color) {
+  const { cats: yc, vals: vd } = padBarSeries(cats, vals, Math.max(5, cats.length));
+  const cols = ['#ff6b6b', '#ff9f43', '#f7c948', '#37c8e8', '#2f9bff', '#a96bf2', '#67e0a3'];
   return {
-    left: leftMerged ? [leftMerged] : [],
-    center: centerOut,
-    right: mergeRightPanels(right),
-    sync,
+    grid: { left: 4, right: 40, top: 6, bottom: 4, containLabel: true },
+    xAxis: { type: 'value', show: false },
+    yAxis: {
+      type: 'category', inverse: true, data: yc, boundaryGap: true,
+      axisLine: { lineStyle: { color: 'rgba(64,158,255,.35)' } },
+      axisLabel: { color: '#a9cbe4', fontSize: 10.5 },
+      axisTick: { show: false },
+    },
+    series: [{
+      type: 'bar', data: vd, barWidth: 12, barMaxWidth: 26, barCategoryGap: '38%',
+      label: { show: true, position: 'right', color: '#7fd4ff', fontSize: 10, formatter: (p) => (p.value ? `${p.value}km` : '') },
+      itemStyle: {
+        borderRadius: 5,
+        color: color || ((p) => cols[p.dataIndex % cols.length]),
+      },
+    }],
   };
 }
 
-function renderThreeColumns(layout) {
-  const left = layout.left[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
-  const center = layout.center.length ? layout.center : [{ title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } }];
-  const right = layout.right[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
-  left.opts = { flex: '1', em: left.opts && left.opts.em };
-  right.opts = { flex: '1', em: right.opts && right.opts.em };
-  return `<div class="main">
-    <div class="col col-left">${mkPanel(left.title, left.body, left.opts)}</div>
-    <div class="col col-mid">${renderColPanels(center)}</div>
-    <div class="col col-right">${mkPanel(right.title, right.body, right.opts)}</div>
-  </div>`;
+function buildTripLeftOption(query) {
+  const kv = extractKV(query);
+  const cats = ['保护动作', '跳闸前接地', '跳闸后复归', '损失电流', '保护装置', '动作类型'];
+  const vals = [
+    numOf(kv['动作类型']) || 8,
+    /有/.test(kv['跳闸前接地情况'] || '') ? 7 : 3,
+    /复归|消失/.test(kv['跳闸后接地复归情况'] || '') ? 6 : 4,
+    numOf(kv['损失负荷电流']) || 1,
+    5,
+    6,
+  ];
+  return buildHBarOption(cats, vals, '#2f9bff');
 }
 
-function renderBusContentCols(layout) {
-  const center = layout.center.length ? layout.center : [{ title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } }];
-  const right = layout.right[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
-  right.opts = { flex: '1', em: right.opts && right.opts.em };
-  return `<div class="content-cols">
-    <div class="col col-mid">${renderColPanels(center)}</div>
-    <div class="col col-right">${mkPanel(right.title, right.body, right.opts)}</div>
-  </div>`;
+function buildGroundLeftOption(query) {
+  const kv = extractKV(query);
+  const text = String(query || '');
+  const ua = numOf(kv['Ua'] || /Ua[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1]) || 0;
+  const ub = numOf(kv['Ub'] || /Ub[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1]) || 10;
+  const uc = numOf(kv['Uc'] || /Uc[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1]) || 10;
+  const cats = ['Ua', 'Ub', 'Uc', '接地相别', '接地选线', '瞬时接地'];
+  const vals = [ua, ub, uc, 5, /有|是/.test(kv['是否有接地选线'] || '') ? 7 : 2, /是/.test(kv['是否瞬时接地'] || '') ? 6 : 3];
+  return buildHBarOption(cats, vals, '#37c8e8');
+}
+
+function buildBusLeftOption(query) {
+  const kv = extractKV(query);
+  const cats = ['厂站', '母线', '接地相别', '接地选线', '选线线路', '瞬时接地'];
+  const vals = [8, 9, 6, /有|是/.test(kv['是否有接地选线'] || '') ? 7 : 3, 5, /是/.test(kv['是否瞬时接地'] || '') ? 4 : 2];
+  return buildHBarOption(cats, vals, '#33d17a');
+}
+
+function buildArchiveTableHtml(answer, skipRe) {
+  const rows = [];
+  parseAnswerSections(answer).forEach((s) => {
+    if (skipRe && skipRe.test(s.title)) return;
+    if (/信息同步|穿越|密集|试拉/.test(s.title)) return;
+    if (/联系人/.test(s.title)) {
+      s.lines.forEach((l) => {
+        const pairs = parseFieldPairs(l);
+        if (pairs.length >= 2) {
+          const m = pairsToMap(pairs);
+          Object.keys(m).forEach((k) => rows.push([k, m[k], s.title]));
+        }
+      });
+      return;
+    }
+    s.lines.forEach((l) => {
+      const t = String(l || '').trim();
+      if (!t || /^无$/.test(t)) return;
+      const pairs = parseFieldPairs(t);
+      if (pairs.length === 1) rows.push([pairs[0][0], pairs[0][1], s.title]);
+      else if (pairs.length >= 2) {
+        const m = pairsToMap(pairs);
+        Object.keys(m).forEach((k) => rows.push([k, m[k], s.title]));
+      } else rows.push([s.title, t, '档案']);
+    });
+  });
+  if (!rows.length) return '<div class="empty">无</div>';
+  const body = rows.map((r) => `<tr><td>${esc(r[2])}</td><td class="nm">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('');
+  return `<table><thead><tr><th>板块</th><th>项目</th><th>内容</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function mkChartPanel(title, option, opts) {
+  const id = nextChartId('c');
+  chartInits.push({ id, option });
+  const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
+  const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
+  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="chart" id="${id}"></div></div></div>`;
+}
+
+function mkTablePanel(title, tableHtml, opts) {
+  const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
+  const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
+  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="tbl">${tableHtml}</div></div></div>`;
+}
+
+function mkNavPanel(title, innerHtml, opts) {
+  const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
+  const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
+  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="tbl nav-tbl">${innerHtml}</div></div></div>`;
+}
+
+function buildPageLayout(query, answer, mainType) {
+  const forest = findSection(answer, /穿越/);
+  const dense = findSection(answer, /密集/);
+  const trial = findSection(answer, /试拉/);
+  let leftTitle = '故障概况';
+  let leftOpt = buildHBarOption(['暂无'], [0], '#2f9bff');
+  if (mainType === '跳闸') {
+    leftTitle = '跳闸概况';
+    leftOpt = buildTripLeftOption(query);
+  } else if (mainType === '接地') {
+    leftTitle = '接地概况';
+    leftOpt = buildGroundLeftOption(query);
+  } else {
+    leftTitle = '母线概况';
+    leftOpt = buildBusLeftOption(query);
+  }
+  const center = [];
+  if (forest.lines.length || /穿越/.test(forest.title)) {
+    const d = extractForestBarData(forest.lines);
+    center.push({ title: forest.title, option: buildHBarOption(d.cats, d.vals), flex: center.length ? '1.25' : '1' });
+  }
+  if (dense.lines.length || /密集/.test(dense.title)) {
+    const d = extractForestBarData(dense.lines);
+    center.push({ title: dense.title, option: buildHBarOption(d.cats, d.vals, '#5ee7a0'), flex: '1.35' });
+  }
+  if (trial.lines.length || /试拉/.test(trial.title)) {
+    const d = extractTrialBarData(trial.lines);
+    center.push({ title: trial.title, option: buildHBarOption(d.cats, d.vals, '#ff9f43'), flex: center.length > 1 ? '1.35' : '1.25' });
+  }
+  if (!center.length) center.push({ title: '区段分析', option: buildHBarOption(['暂无'], [0]), flex: '1' });
+  if (center.length === 1) center[0].flex = '1';
+  else if (center.length === 2) { center[0].flex = '1.25'; center[1].flex = '1.35'; }
+  else if (center.length >= 3) { center[0].flex = '1.2'; center[1].flex = '1.2'; center[2].flex = '1.2'; }
+  const tableHtml = buildArchiveTableHtml(answer, mainType === '跳闸' ? /试拉/ : null);
+  const sync = findSection(answer, /信息同步/);
+  return { leftTitle, leftOpt, center, tableHtml, sync };
+}
+
+function renderThreeColumnsFromLayout(layout) {
+  const left = mkChartPanel(layout.leftTitle, layout.leftOpt, { flex: '1' });
+  const mid = layout.center.map((p) => mkChartPanel(p.title, p.option, { flex: p.flex })).join('');
+  const right = mkTablePanel('线路档案', layout.tableHtml, { flex: '1', em: '明细' });
+  return `<div class="main"><div class="col col-left">${left}</div><div class="col col-mid">${mid}</div><div class="col col-right">${right}</div></div>`;
+}
+
+function renderBusContentColsFromLayout(layout) {
+  const mid = layout.center.map((p) => mkChartPanel(p.title, p.option, { flex: p.flex })).join('');
+  const right = mkTablePanel('线路档案', layout.tableHtml, { flex: '1', em: '明细' });
+  return `<div class="content-cols"><div class="col col-mid">${mid}</div><div class="col col-right">${right}</div></div>`;
+}
+
+function buildChartBootScript() {
+  if (!chartInits.length) return '';
+  const payload = chartInits.map((c) => `mk("${c.id}",${JSON.stringify(c.option)});`).join('');
+  return `<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script><script>
+function mk(id,opt){var el=document.getElementById(id);if(!el||typeof echarts==="undefined")return;var c=echarts.init(el);c.setOption(opt);addEventListener("resize",function(){c.resize();});}
+${payload}
+setTimeout(function(){document.querySelectorAll(".chart").forEach(function(el){var c=echarts.getInstanceByDom(el);if(c)c.resize();});},120);
+</script>`;
+}
+
+function buildBusLineLayout(query, answer, lineLines, trialLines) {
+  const subs = parseLineSubs(lineLines);
+  const center = [];
+  subs.forEach((sub) => {
+    if (/穿越|密集/.test(sub.title)) {
+      const src = sub.body.length ? sub.body : (sub.value ? [sub.value] : []);
+      const d = extractForestBarData(src);
+      center.push({
+        title: sub.title,
+        option: buildHBarOption(d.cats, d.vals, /穿越/.test(sub.title) ? '#2f9bff' : '#5ee7a0'),
+        flex: '1.25',
+      });
+    }
+  });
+  if (trialLines && trialLines.length) {
+    const d = extractTrialBarData(trialLines);
+    center.push({ title: '试拉建议', option: buildHBarOption(d.cats, d.vals, '#ff9f43'), flex: '1.35' });
+  }
+  if (!center.length) center.push({ title: '区段分析', option: buildHBarOption(['暂无'], [0]), flex: '1' });
+  if (center.length === 1) center[0].flex = '1';
+  else if (center.length === 2) { center[0].flex = '1.25'; center[1].flex = '1.35'; }
+  const rows = [];
+  subs.forEach((sub) => {
+    if (/穿越|密集/.test(sub.title)) return;
+    if (sub.value) rows.push([sub.title, sub.title, sub.value]);
+    sub.body.forEach((l) => {
+      const t = String(l || '').trim();
+      if (!t || /^无$/.test(t)) return;
+      const pairs = parseFieldPairs(t);
+      if (pairs.length === 1) rows.push([sub.title, pairs[0][0], pairs[0][1]]);
+      else if (pairs.length >= 2) {
+        const m = pairsToMap(pairs);
+        Object.keys(m).forEach((k) => rows.push([sub.title, k, m[k]]));
+      } else rows.push([sub.title, sub.title, t]);
+    });
+  });
+  const tableHtml = rows.length
+    ? `<table><thead><tr><th>板块</th><th>项目</th><th>内容</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r[0])}</td><td class="nm">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="empty">无</div>';
+  return {
+    leftTitle: '母线概况',
+    leftOpt: buildBusLeftOption(query),
+    center,
+    tableHtml,
+    sync: findBlock(answer, /信息同步/),
+  };
 }
 
 function buildTickerHtml(answer, syncPanel) {
@@ -462,7 +678,7 @@ function collectBusPages(query, answer) {
         { title: '三相电压定位', body: buildVoltPanel(query) },
       ];
       parseLineSubs(b.lines).forEach((sub) => panels.push({ title: sub.title, body: renderSubBody(sub) }));
-      pages.push({ name: t, panels });
+      pages.push({ name: t, panels, lines: b.lines });
       return;
     }
     if (/试拉/.test(t)) trial = { title: t, body: renderSectionBody(t, b.lines) };
@@ -477,7 +693,7 @@ function collectBusPages(query, answer) {
   return pages;
 }
 
-const LINE_PICK_SCRIPT = `<script>(function(){var btns=document.querySelectorAll(".line-pick"),pages=document.querySelectorAll(".line-page");btns.forEach(function(b){b.addEventListener("click",function(){var i=b.getAttribute("data-i");btns.forEach(function(x){x.classList.remove("active");});pages.forEach(function(p){p.classList.remove("active");});b.classList.add("active");var pg=document.querySelector('.line-page[data-i="'+i+'"]');if(pg)pg.classList.add("active");}});});})();</script>`;
+const LINE_PICK_SCRIPT = `<script>(function(){var btns=document.querySelectorAll(".line-pick"),pages=document.querySelectorAll(".line-page");btns.forEach(function(b){b.addEventListener("click",function(){var i=b.getAttribute("data-i");btns.forEach(function(x){x.classList.remove("active");});pages.forEach(function(p){p.classList.remove("active");});b.classList.add("active");var pg=document.querySelector('.line-page[data-i="'+i+'"]');if(pg){pg.classList.add("active");pg.querySelectorAll(".chart").forEach(function(el){var c=typeof echarts!=="undefined"?echarts.getInstanceByDom(el):null;if(c)c.resize();});}});});})();</script>`;
 
 const CLOCK_SCRIPT = `<script>(function(){function tick(){var n=new Date(),p=function(s){return String(s).padStart(2,"0")};var el=document.getElementById("clk"),dt=document.getElementById("dt");if(el)el.textContent=p(n.getHours())+":"+p(n.getMinutes())+":"+p(n.getSeconds());if(dt)dt.textContent=n.getFullYear()+"-"+p(n.getMonth()+1)+"-"+p(n.getDate());}tick();setInterval(tick,1000);})();</script>`;
 
@@ -792,14 +1008,15 @@ const CSS = `
     radial-gradient(ellipse at 85% 100%,rgba(16,70,120,.25),transparent 50%)}
   .bg::after{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(64,158,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(64,158,255,.05) 1px,transparent 1px);background-size:46px 46px}
   .wrap{position:relative;z-index:1;min-height:100%;height:100%;display:flex;flex-direction:column;padding:0 18px 10px}
-  .hd{flex:0 0 auto;text-align:center;padding:16px 0 6px;position:relative}
+  .hd{flex:0 0 auto;display:grid;grid-template-columns:210px 1fr 210px;align-items:center;padding:16px 0 6px}
+  .hd-center{text-align:center;min-width:0}
   .hd h1{font-size:clamp(20px,2.2vw,32px);letter-spacing:6px;font-weight:700;color:#fff;text-shadow:0 0 18px rgba(45,140,255,.8),0 0 40px rgba(45,140,255,.4)}
   .hd .deco{height:12px;margin:6px auto 0;max-width:1400px;background:radial-gradient(ellipse at 50% 0,rgba(64,170,255,.55),transparent 70%);position:relative}
   .hd .deco::before{content:"";position:absolute;left:0;right:0;top:5px;height:2px;background:linear-gradient(90deg,transparent,#2f9bff 30%,#7fd4ff 50%,#2f9bff 70%,transparent);box-shadow:0 0 12px #2f9bff}
   .hd .badge{display:inline-block;border:1px solid rgba(64,158,255,.45);color:#7fc3ff;border-radius:3px;font-size:11px;padding:2px 10px;margin:6px 4px 0;letter-spacing:1px;background:rgba(20,60,100,.25)}
-  .hd .clock{position:absolute;right:8px;top:22px;text-align:right;font-size:12px;color:#7fb6dd;line-height:1.7}
+  .hd .clock{text-align:right;font-size:12px;color:#7fb6dd;line-height:1.7;justify-self:end;padding-right:8px}
   .hd .clock b{font-size:18px;color:#eaf6ff;font-family:Consolas,monospace;letter-spacing:1px}
-  .hd .logo{position:absolute;left:14px;top:20px;display:flex;align-items:center;gap:8px}
+  .hd .logo{display:flex;align-items:center;gap:8px;justify-self:start;padding-left:14px}
   .hd .logo .mark{width:34px;height:34px;border-radius:50%;border:2px solid #2f9bff;display:flex;align-items:center;justify-content:center;color:#7fd4ff;font-size:11px;font-weight:700;box-shadow:0 0 12px rgba(47,155,255,.6)}
   .hd .logo span{font-size:12px;color:#8db8dc;letter-spacing:2px;line-height:1.5;text-align:left}
   .kpis{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:10px 0}
@@ -824,8 +1041,15 @@ const CSS = `
   .pt b{font-size:13.5px;color:#dff0ff;letter-spacing:2px;font-weight:600}
   .pt em{margin-left:auto;font-style:normal;font-size:10.5px;color:#5d89ad;letter-spacing:1px}
   .pc{flex:1;min-height:0;position:relative}
-  .tbl{position:absolute;inset:0;overflow:auto;padding:8px 10px;font-size:13px;line-height:1.55}
+  .chart{position:absolute;inset:0}
+  .tbl{position:absolute;inset:0;overflow:auto;padding:0 8px 8px;font-size:11px;line-height:1.45}
   .tbl::-webkit-scrollbar{width:4px}.tbl::-webkit-scrollbar-thumb{background:rgba(64,158,255,.35)}
+  .nav-tbl{padding:8px 6px}
+  table{width:100%;border-collapse:collapse}
+  th{position:sticky;top:0;background:#0d2c4a;color:#7fc3ff;padding:6px 4px;font-weight:600;letter-spacing:1px;border-bottom:1px solid rgba(64,158,255,.35);z-index:1}
+  td{padding:5px 4px;text-align:center;color:#a9cbe4;border-bottom:1px dashed rgba(64,158,255,.12)}
+  tr:nth-child(even) td{background:rgba(20,60,100,.15)}
+  td.nm{color:#eaf6ff;font-weight:600}
   .fill-y{min-height:100%;height:100%;display:flex;flex-direction:column}
   .line-nav-inner{display:flex;flex-direction:column;gap:10px;height:100%;padding:2px}
   .line-pick{position:relative;flex:1;min-height:52px;display:flex;align-items:center;width:100%;text-align:left;padding:14px 12px;font-size:14px;font-weight:600;line-height:1.4;color:#7ea6c8;cursor:pointer;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
@@ -893,31 +1117,33 @@ const CSS = `
 function buildBodyHtml(query, answer, mainType) {
   if (mainType === '母线接地') {
     const pages = collectBusPages(query, answer);
-    let sync = null;
     const syncSec = parseAnswerBlocks(answer).find((b) => /信息同步/.test(b.title));
-    if (syncSec) sync = { raw: syncSec.lines.join(' ').trim() };
+    const sync = syncSec ? { raw: syncSec.lines.join(' ').trim() } : null;
+    const trialBlock = parseAnswerBlocks(answer).find((b) => /试拉/.test(b.title));
+    const trialLines = trialBlock ? trialBlock.lines : [];
     if (!pages.length) {
-      return { main: renderThreeColumns({ left: [], center: [], right: [] }), ticker: buildTickerHtml(answer, sync) };
+      const empty = buildPageLayout(query, answer, mainType);
+      return { main: renderThreeColumnsFromLayout(empty), ticker: buildTickerHtml(answer, sync) };
     }
     const nav = pages.map((pg, i) =>
       `<button type="button" class="line-pick${i === 0 ? ' active' : ''}" data-i="${i}">${esc(pg.name)}</button>`
     ).join('');
     const stage = pages.map((pg, i) => {
-      const layout = distributePanels(pg.panels);
-      return `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderBusContentCols(layout)}</div>`;
+      const layout = buildBusLineLayout(query, answer, pg.lines, trialLines);
+      return `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderBusContentColsFromLayout(layout)}</div>`;
     }).join('');
     const main = `<div class="main bus-main">
-      <div class="col col-nav">${mkPanel('线路选择', `<div class="line-nav-inner">${nav}</div>`, { em: `${pages.length}条`, flex: '1' })}</div>
+      <div class="col col-nav">${mkNavPanel('线路选择', `<div class="line-nav-inner">${nav}</div>`, { em: `${pages.length}条`, flex: '1' })}</div>
       <div class="content-wrap"><div class="line-stage">${stage}</div></div>
     </div>`;
     return { main, ticker: buildTickerHtml(answer, sync) };
   }
-  const panels = mainType === '跳闸' ? collectTripPanels(query, answer) : collectGroundPanels(query, answer);
-  const layout = distributePanels(panels);
-  return { main: renderThreeColumns(layout), ticker: buildTickerHtml(answer, layout.sync) };
+  const layout = buildPageLayout(query, answer, mainType);
+  return { main: renderThreeColumnsFromLayout(layout), ticker: buildTickerHtml(answer, layout.sync) };
 }
 
 function buildHtml({ query, answer }) {
+  resetCharts();
   const mainType = pickMain(query);
   const eventTime = findEventTime(`${query}\n${answer}`);
   const typeLabel = mainType === '接地' ? '单线接地' : mainType;
@@ -930,7 +1156,7 @@ function buildHtml({ query, answer }) {
   const dt = now.split(' ')[0] || '';
   const kpiHtml = buildKpiStrip(query, answer, mainType);
   const { main: mainHtml, ticker: tickerHtml } = buildBodyHtml(query, answer, mainType);
-  const script = (mainType === '母线接地' ? LINE_PICK_SCRIPT : '') + CLOCK_SCRIPT;
+  const script = buildChartBootScript() + (mainType === '母线接地' ? LINE_PICK_SCRIPT : '') + CLOCK_SCRIPT;
   const badge = eventTime ? `<div class="badge">事件 ${esc(eventTime)}</div>` : '';
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -945,9 +1171,11 @@ function buildHtml({ query, answer }) {
 <div class="wrap">
   <div class="hd">
     <div class="logo"><div class="mark">HD</div><span>黄岛<br>故障信息分析</span></div>
-    <h1>${title}</h1>
-    <div class="deco"></div>
-    ${badge}
+    <div class="hd-center">
+      <h1>${title}</h1>
+      <div class="deco"></div>
+      ${badge}
+    </div>
     <div class="clock"><b id="clk">${esc(clk)}</b><br><span id="dt">${esc(dt)}</span></div>
   </div>
   ${kpiHtml}
