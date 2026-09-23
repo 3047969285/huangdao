@@ -1,4 +1,4 @@
-/** 黄岛故障看板 v6：跳闸/接地/母线三套监测大屏（1920×1080，一标题一面板）。FAULT_SEED_FILE 可离线重渲染。 */
+/** 黄岛故障看板 v7：跳闸/接地/母线统一满屏模板（1920×1080，一标题一面板）。FAULT_SEED_FILE 可离线重渲染。 */
 const fs = require('fs');
 const path = require('path');
 const biz = require('./index.js'); // 复用 API 调用逻辑
@@ -185,7 +185,7 @@ function numOf(v) {
   return m ? parseFloat(m[1]) : null;
 }
 
-// ---------------- 监测大屏 v6（1920×1080 一屏铺满） ----------------
+// ---------------- 监测大屏 v7（统一满屏模板） ----------------
 
 function ringGauge(label, value, maxVal) {
   const n = numOf(value);
@@ -251,7 +251,7 @@ function renderSectionBody(title, lines) {
   const pure = lines.map((l) => String(l || '').trim()).filter(Boolean);
   if (!pure.length) return '<div class="empty">无</div>';
   if (/试拉/.test(title)) return renderTrialList(pure);
-  if (/信息同步/.test(title)) return `<div class="narr sync-txt">${esc(pure.join('\\n'))}</div>`;
+  if (/信息同步/.test(title)) return `<div class="narr sync-txt">${esc(pure.join('\n'))}</div>`;
   if (/穿越林区|密集通道/.test(title)) return renderForestBars(pure);
   if (/联系人|概况/.test(title)) return renderRowTables(pure);
   if (/故障信息/.test(title)) {
@@ -279,11 +279,131 @@ function renderBlockBody(block) {
   return renderSectionBody(block.title, block.lines);
 }
 
-function mkPanel(title, body, col, row) {
-  const cs = col || 1;
-  const rs = row || 1;
-  return `<div class="panel" style="grid-column:span ${cs};grid-row:span ${rs}"><div class="panel-h"><i></i>${esc(title)}</div><div class="panel-b">${body || '<div class="empty">无</div>'}</div></div>`;
+function panelSpan(title) {
+  if (/信息同步|跳闸过程/.test(title)) return { c: 4, r: 1 };
+  if (/穿越|密集|试拉|联系人|概况/.test(title)) return { c: 2, r: 2 };
+  if (/电压|接地信息|过流|母线接地/.test(title)) return { c: 2, r: 1 };
+  return { c: 2, r: 1 };
 }
+
+function mkPanel(title, body, col, row) {
+  const sp = col ? { c: col, r: row || 1 } : panelSpan(title);
+  return `<div class="panel" style="grid-column:span ${sp.c};grid-row:span ${sp.r}"><div class="panel-h"><i></i>${esc(title)}</div><div class="panel-b">${body || '<div class="empty">无</div>'}</div></div>`;
+}
+
+function renderPageGrid(panels) {
+  return `<div class="page-grid">${panels.map((p) => mkPanel(p.title, p.body, p.c, p.r)).join('')}</div>`;
+}
+
+function parseLineSubs(lines) {
+  const subs = [];
+  let cur = null;
+  for (const raw of lines) {
+    const line = raw.replace(/^\s+/, '').replace(/\s+$/, '');
+    if (!line) continue;
+    const m = line.match(/^(\d+)\s*[、\.]\s*(.+)$/);
+    if (m) {
+      const t = m[2].trim();
+      const tm = t.match(/^(.+?)[：:]\s*(\S.*)$/);
+      cur = { title: tm ? tm[1].trim() : t.replace(/[：:]\s*$/, ''), value: tm ? tm[2].trim() : '', body: [] };
+      subs.push(cur);
+      continue;
+    }
+    if (cur) cur.body.push(line);
+  }
+  return subs.filter((s) => !/供电所联系人/.test(s.title));
+}
+
+function renderSubBody(sub) {
+  const NONE = '<div class="empty">无</div>';
+  const items = sub.body.map((l) => l.trim()).filter(Boolean);
+  const onlyNone = !sub.value && (!items.length || (items.length === 1 && /^无$/.test(items[0])));
+  if (onlyNone) return NONE;
+  if (/穿越|密集/.test(sub.title)) {
+    const src = items.length ? items : (sub.value ? [sub.value] : []);
+    return renderForestBars(src);
+  }
+  if (sub.value && !items.length) return `<div class="ld-value big">${esc(sub.value)}</div>`;
+  const parts = [];
+  if (sub.value) parts.push(`<div class="ld-value big">${esc(sub.value)}</div>`);
+  const md = parseMdTable(items);
+  if (md) {
+    const maps = md.rows.map((r) => { const o = {}; md.headers.forEach((h, i) => { o[h] = r[i] != null ? r[i] : ''; }); return o; });
+    if (maps.every((r) => md.headers.every((h) => isBlankCell(r[h])))) parts.push(NONE);
+    else parts.push(renderRecordCards(md.headers, maps));
+  } else {
+    const records = [];
+    const rest = [];
+    items.forEach((l) => {
+      const pairs = parseFieldPairs(l).filter(([, v]) => String(v || '').trim());
+      if (pairs.length >= 2) records.push(pairs);
+      else rest.push({ line: l, pairs });
+    });
+    if (records.length) {
+      const headers = [];
+      records.forEach((ps) => ps.forEach(([k]) => headers.includes(k) || headers.push(k)));
+      parts.push(renderRecordCards(headers, records.map(pairsToMap)));
+    }
+    rest.forEach(({ line, pairs }) => {
+      if (/^无$/.test(line)) parts.push(NONE);
+      else if (pairs.length === 1) parts.push(`<div class="ld-row"><span>${esc(pairs[0][0])}</span><b>${esc(pairs[0][1])}</b></div>`);
+      else parts.push(`<div class="ld-text">${esc(line)}</div>`);
+    });
+  }
+  return parts.length ? parts.join('') : NONE;
+}
+
+function collectTripPanels(query, answer) {
+  const panels = [
+    { title: '跳闸过程', body: buildTripFlow(query) },
+    { title: '过流动作', body: buildOcPanel(query) },
+  ];
+  parseAnswerSections(answer).forEach((s) => {
+    if (/试拉/.test(s.title)) return;
+    panels.push({ title: s.title, body: renderSectionBody(s.title, s.lines) });
+  });
+  return panels;
+}
+
+function collectGroundPanels(query, answer) {
+  const panels = [
+    { title: '三相电压', body: buildVoltPanel(query) },
+    { title: '接地信息', body: buildGroundInfo(query) },
+  ];
+  parseAnswerSections(answer).forEach((s) => {
+    panels.push({ title: s.title, body: renderSectionBody(s.title, s.lines) });
+  });
+  return panels;
+}
+
+function collectBusPages(query, answer) {
+  const pages = [];
+  let trial = null;
+  let sync = null;
+  parseAnswerBlocks(answer).forEach((b) => {
+    const t = b.title.replace(/^([一二三四五六七八九十]+)\s*[、\.]\s*/, '');
+    if (/\d+kV[\u4e00-\u9fa5A-Za-z0-9-]*线/.test(t)) {
+      const panels = [
+        { title: '母线接地信息', body: buildBusMeta(query) },
+        { title: '三相电压定位', body: buildVoltPanel(query) },
+      ];
+      parseLineSubs(b.lines).forEach((sub) => panels.push({ title: sub.title, body: renderSubBody(sub) }));
+      pages.push({ name: t, panels });
+      return;
+    }
+    if (/试拉/.test(t)) trial = { title: t, body: renderSectionBody(t, b.lines) };
+    else if (/信息同步/.test(t)) sync = { title: t, body: renderSectionBody(t, b.lines) };
+  });
+  if (trial || sync) {
+    pages.forEach((pg) => {
+      if (trial) pg.panels.push(trial);
+      if (sync) pg.panels.push(sync);
+    });
+  }
+  return pages;
+}
+
+const LINE_PICK_SCRIPT = `<script>(function(){var btns=document.querySelectorAll(".line-pick"),pages=document.querySelectorAll(".line-page");btns.forEach(function(b){b.addEventListener("click",function(){var i=b.getAttribute("data-i");btns.forEach(function(x){x.classList.remove("active");});pages.forEach(function(p){p.classList.remove("active");});b.classList.add("active");var pg=document.querySelector('.line-page[data-i="'+i+'"]');if(pg){pg.classList.add("active");var g=pg.querySelector(".page-grid");if(g)g.scrollTop=0;}});});})();</script>`;
 
 function buildKpiStrip(query, answer, mainType) {
   const rows = buildKpiRows(query, answer, mainType);
@@ -324,58 +444,6 @@ function buildBusMeta(query) {
     ['接地相别', kv['接地相别'] || qval(/接地相别[：:]\s*(\S+)/) || '—'], ['接地选线', kv['是否有接地选线'] || qval(/是否有接地选线[：:]\s*(\S+)/) || '—'],
     ['选线线路', kv['接地选线线路名称'] || qval(/接地选线线路名称[：:]\s*([^\n]+)/) || '—'], ['瞬时接地', kv['是否瞬时接地'] || qval(/是否瞬时接地[：:]\s*(\S+)/) || '—'],
   ]);
-}
-
-function buildCandPanel(query, answer) {
-  const kv = extractKV(query);
-  const names = collectCandidateLines(query, answer, kv, { forceScan: true });
-  if (!names.length) return '<div class="empty">无</div>';
-  return `<div class="tag-row">${names.map((l, i) => `<div class="ltag"><b>${esc(l)}</b><small>候选 ${i + 1}</small></div>`).join('')}</div>`;
-}
-
-function collectArchivePanels(answer, mainType) {
-  const panels = [];
-  if (mainType === '母线接地') {
-    parseAnswerBlocks(answer).forEach((b) => {
-      const t = b.title.replace(/^([一二三四五六七八九十]+)\s*[、\.]\s*/, '');
-      let c = 2, r = 1;
-      if (/概况/.test(t)) { c = 2; r = 2; }
-      else if (/10kV/.test(t)) { c = 2; r = 2; }
-      else if (/试拉/.test(t)) { c = 3; r = 2; }
-      else if (/信息同步/.test(t)) { c = 3; r = 2; }
-      panels.push({ title: t, body: renderBlockBody(b), c, r });
-    });
-    return panels;
-  }
-  parseAnswerSections(answer).forEach((s) => {
-    if (mainType === '跳闸' && /试拉/.test(s.title)) return;
-    let c = 2, r = 1;
-    if (/联系人/.test(s.title)) { c = 2; r = 2; }
-    else if (/穿越|密集/.test(s.title)) { c = 3; r = 2; }
-    else if (/信息同步|试拉/.test(s.title)) { c = 3; r = 2; }
-    panels.push({ title: s.title, body: renderSectionBody(s.title, s.lines), c, r });
-  });
-  return panels;
-}
-
-function collectDailyPanels(query, answer, mainType) {
-  if (mainType === '跳闸') {
-    return [
-      { title: '跳闸过程', body: buildTripFlow(query), c: 4, r: 2 },
-      { title: '过流动作', body: buildOcPanel(query), c: 2, r: 2 },
-    ];
-  }
-  if (mainType === '接地') {
-    return [
-      { title: '三相电压', body: buildVoltPanel(query), c: 3, r: 2 },
-      { title: '接地信息', body: buildGroundInfo(query), c: 3, r: 1 },
-    ];
-  }
-  return [
-    { title: '母线接地信息', body: buildBusMeta(query), c: 2, r: 1 },
-    { title: '三相电压定位', body: buildVoltPanel(query), c: 2, r: 1 },
-    { title: '候选线路', body: buildCandPanel(query, answer), c: 2, r: 1 },
-  ];
 }
 
 function collectCandidateLines(text, extraText, kv, opts) {
@@ -640,73 +708,102 @@ const CSS = `
   :root{--bg:#06101f;--panel:#0a1628;--ink:#e6f4ff;--sub:#7a9ec4;--cyan:#00e5ff;--line:rgba(0,229,255,.35);--glow:rgba(0,229,255,.15);--red:#ff4d6a;--r:6px}
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:1920px;height:1080px;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,100,180,.25),transparent),linear-gradient(180deg,#040a14 0%,#06101f 40%,#050d18 100%);color:var(--ink);-webkit-font-smoothing:antialiased}
-  .screen{width:1920px;height:1080px;display:flex;flex-direction:column;padding:12px 16px 14px;gap:10px}
-  .screen-head{position:relative;text-align:center;padding:10px 0 8px;flex-shrink:0}
+  .screen{width:1920px;height:1080px;display:flex;flex-direction:column;padding:10px 14px 12px;gap:8px}
+  .screen-head{position:relative;text-align:center;padding:6px 0 4px;flex-shrink:0}
   .screen-head::before,.screen-head::after{content:"";position:absolute;top:50%;width:28%;height:1px;background:linear-gradient(90deg,transparent,var(--cyan),transparent)}
   .screen-head::before{left:2%}.screen-head::after{right:2%}
-  .screen-title{font-size:28px;font-weight:800;letter-spacing:4px;color:#fff;text-shadow:0 0 20px var(--glow),0 0 40px rgba(0,229,255,.2)}
-  .screen-sub{font-size:12px;color:var(--sub);margin-top:4px}
+  .screen-title{font-size:26px;font-weight:800;letter-spacing:3px;color:#fff;text-shadow:0 0 20px var(--glow)}
+  .screen-sub{font-size:12px;color:var(--sub);margin-top:3px}
   .screen-sub .time-keep{white-space:nowrap}
-  .kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;flex-shrink:0}
-  .stat-chip{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;text-align:center;box-shadow:0 0 12px var(--glow),inset 0 0 20px rgba(0,229,255,.03)}
-  .sc-val{font-size:16px;font-weight:800;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;flex-shrink:0}
+  .stat-chip{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:6px 8px;text-align:center}
+  .sc-val{font-size:15px;font-weight:800;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sc-lbl{font-size:10px;color:var(--sub);margin-top:2px}
-  .screen-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(6,1fr);grid-auto-rows:minmax(0,1fr);gap:10px}
-  .panel{background:linear-gradient(135deg,rgba(10,22,40,.95),rgba(6,16,31,.98));border:1px solid var(--line);border-radius:var(--r);box-shadow:0 0 16px var(--glow),inset 0 1px 0 rgba(0,229,255,.08);display:flex;flex-direction:column;min-height:0;overflow:hidden}
-  .panel-h{flex-shrink:0;padding:8px 12px;font-size:13px;font-weight:700;color:var(--cyan);border-bottom:1px solid rgba(0,229,255,.2);display:flex;align-items:center;gap:8px;background:rgba(0,229,255,.04)}
-  .panel-h i{display:inline-block;width:3px;height:14px;background:var(--cyan);box-shadow:0 0 6px var(--cyan)}
-  .panel-b{flex:1;min-height:0;padding:10px 12px;font-size:12px;line-height:1.5;overflow:auto}
-  .empty{color:var(--sub);text-align:center;padding:16px 0;font-size:12px}
-  .narr{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6}
-  .sync-txt{font-size:12px;color:#d0e8ff}
-  .clist{display:flex;flex-direction:column;gap:4px}
-  .cl-row{display:flex;justify-content:space-between;gap:8px;padding:4px 6px;background:rgba(0,229,255,.04);border-radius:4px;font-size:11.5px}
+  .screen-body{flex:1;min-height:0;display:flex;gap:10px}
+  .screen-body.solo .line-stage{flex:1}
+  .line-nav{width:188px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;padding-top:4px}
+  .line-nav-label{font-size:12px;color:var(--sub);padding:0 4px 4px;border-bottom:1px solid rgba(0,229,255,.2)}
+  .line-pick{width:100%;text-align:left;padding:14px 12px;font-size:15px;font-weight:700;color:var(--sub);background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.28);border-radius:var(--r);cursor:pointer;line-height:1.3}
+  .line-pick.active{color:#001018;background:linear-gradient(135deg,#0088cc,var(--cyan));border-color:var(--cyan);box-shadow:0 0 14px var(--glow)}
+  .line-stage{flex:1;min-width:0;min-height:0;position:relative}
+  .line-page{display:none;position:absolute;inset:0;flex-direction:column}
+  .line-page.active{display:flex}
+  .page-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:minmax(0,1fr);gap:10px;overflow:auto}
+  .panel{background:linear-gradient(135deg,rgba(10,22,40,.95),rgba(6,16,31,.98));border:1px solid var(--line);border-radius:var(--r);box-shadow:0 0 14px var(--glow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel-h{flex-shrink:0;padding:10px 14px;font-size:15px;font-weight:700;color:var(--cyan);border-bottom:1px solid rgba(0,229,255,.2);display:flex;align-items:center;gap:8px;background:rgba(0,229,255,.04)}
+  .panel-h i{display:inline-block;width:3px;height:16px;background:var(--cyan);box-shadow:0 0 6px var(--cyan)}
+  .panel-b{flex:1;min-height:0;padding:12px 14px;font-size:14px;line-height:1.55;overflow:auto}
+  .empty{color:var(--sub);text-align:center;padding:20px 0;font-size:14px}
+  .narr{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.65}
+  .sync-txt{font-size:14px;color:#d0e8ff}
+  .clist{display:flex;flex-direction:column;gap:6px}
+  .cl-row{display:flex;justify-content:space-between;gap:10px;padding:6px 8px;background:rgba(0,229,255,.04);border-radius:4px;font-size:14px}
   .cl-row span{color:var(--sub);flex-shrink:0}
   .cl-row b{color:#fff;font-weight:600;text-align:right;word-break:break-all}
-  .flow-4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;height:100%;align-content:center}
-  .flow-step{text-align:center;padding:10px 6px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.2);border-radius:var(--r)}
-  .fs-n{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#0088cc,var(--cyan));color:#001018;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:0 0 10px var(--glow)}
-  .fs-v{margin-top:8px;font-size:14px;font-weight:700;color:#fff}
-  .fs-l{font-size:10px;color:var(--sub);margin-top:2px}
-  .ring-row{display:flex;justify-content:space-around;align-items:center;height:100%;gap:8px}
-  .ring-box{position:relative;width:88px;height:88px}
-  .ring-svg{width:88px;height:88px}
+  .flow-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;height:100%;align-content:center}
+  .flow-step{text-align:center;padding:12px 8px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.2);border-radius:var(--r)}
+  .fs-n{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#0088cc,var(--cyan));color:#001018;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:14px}
+  .fs-v{margin-top:10px;font-size:16px;font-weight:700;color:#fff}
+  .fs-l{font-size:11px;color:var(--sub);margin-top:3px}
+  .ring-row{display:flex;justify-content:space-around;align-items:center;height:100%;gap:10px}
+  .ring-box{position:relative;width:96px;height:96px}
+  .ring-svg{width:96px;height:96px}
   .ring-track{fill:none;stroke:rgba(0,229,255,.12);stroke-width:8}
   .ring-arc{fill:none;stroke-width:8;stroke-linecap:round;filter:drop-shadow(0 0 4px currentColor)}
   .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-  .ring-center b{font-size:14px;font-weight:800}
-  .ring-center span{font-size:10px;color:var(--sub);margin-top:2px}
-  .hbar{display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center;margin-bottom:5px;font-size:11px}
-  .hb-lbl{color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hb-track{height:8px;background:rgba(0,229,255,.1);border-radius:4px;overflow:hidden}
-  .hb-fill{height:100%;background:linear-gradient(90deg,#0066aa,var(--cyan));border-radius:4px;box-shadow:0 0 6px var(--glow)}
-  .hb-val{color:var(--cyan);font-weight:700;font-size:10px;white-space:nowrap}
-  .trial-head{font-size:11px;color:var(--cyan);margin-bottom:6px;padding:4px 0}
-  .trial-row{display:grid;grid-template-columns:22px 1fr;gap:6px;align-items:center;margin-bottom:5px}
-  .trial-n{width:20px;height:20px;border-radius:50%;background:var(--cyan);color:#001018;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
-  .trial-bar{grid-column:2;height:6px;background:rgba(0,229,255,.1);border-radius:3px;overflow:hidden}
+  .ring-center b{font-size:16px;font-weight:800}
+  .ring-center span{font-size:11px;color:var(--sub);margin-top:2px}
+  .hbar{display:grid;grid-template-columns:1.1fr 2fr auto;gap:8px;align-items:center;margin-bottom:8px;font-size:13px}
+  .hb-lbl{color:var(--sub);line-height:1.35}
+  .hb-track{height:10px;background:rgba(0,229,255,.1);border-radius:5px;overflow:hidden}
+  .hb-fill{height:100%;background:linear-gradient(90deg,#0066aa,var(--cyan));border-radius:5px}
+  .hb-val{color:var(--cyan);font-weight:700;font-size:12px;white-space:nowrap}
+  .trial-head{font-size:13px;color:var(--cyan);margin-bottom:8px}
+  .trial-row{display:grid;grid-template-columns:26px 1fr;gap:8px;align-items:start;margin-bottom:8px}
+  .trial-n{width:24px;height:24px;border-radius:50%;background:var(--cyan);color:#001018;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .trial-bar{grid-column:2;height:8px;background:rgba(0,229,255,.1);border-radius:4px;overflow:hidden}
   .trial-fill{height:100%;background:linear-gradient(90deg,#0066aa,var(--cyan))}
-  .trial-txt{grid-column:2;font-size:10.5px;color:#c8dff5;line-height:1.4;margin-top:-2px;padding-bottom:4px}
-  .tag-row{display:flex;flex-wrap:wrap;gap:8px}
-  .ltag{padding:8px 12px;border:1px solid var(--line);border-radius:var(--r);background:rgba(0,229,255,.06);text-align:center;min-width:120px}
-  .ltag b{display:block;font-size:13px;color:#fff}
-  .ltag small{font-size:10px;color:var(--sub)}
-  .ld-seg{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:4px;padding:6px 8px;margin-bottom:5px}
-  .ld-row{display:flex;gap:6px;font-size:11px;padding:2px 0}
-  .ld-row span{color:var(--sub);flex:0 0 5em}
+  .trial-txt{grid-column:2;font-size:13px;color:#c8dff5;line-height:1.45;margin-top:4px}
+  .ld-seg{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:4px;padding:8px 10px;margin-bottom:6px}
+  .ld-row{display:flex;gap:8px;font-size:14px;padding:4px 0}
+  .ld-row span{color:var(--sub);flex:0 0 8em}
   .ld-row b{color:var(--ink);font-weight:600;word-break:break-word}
-  .ld-sub{margin-bottom:8px}
-  .ld-sub-title{font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:4px;padding-left:6px;border-left:2px solid var(--cyan)}
-  .ld-none,.ld-text,.ld-value{font-size:11px;color:var(--sub)}
-  .relay-list{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}
-  .relay-item{display:flex;justify-content:space-between;gap:6px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:4px;padding:4px 8px;font-size:11px}
+  .ld-value.big{font-size:16px;font-weight:700;color:#fff;padding:8px 0}
+  .ld-none,.ld-text{font-size:14px;color:var(--sub)}
+  .relay-list{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+  .relay-item{display:flex;justify-content:space-between;gap:8px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:4px;padding:6px 10px;font-size:13px}
   .relay-name{color:var(--sub)}.relay-val{color:var(--cyan);font-weight:600;text-align:right}
-  .relay-group{margin-top:6px;padding:6px 8px;border:1px solid rgba(0,229,255,.15);border-left:2px solid var(--cyan);border-radius:4px}
-  .relay-group-title{font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:4px}
-  table.dt{width:100%;border-collapse:collapse;font-size:10.5px}
-  table.dt th{background:rgba(0,229,255,.12);color:#fff;text-align:left;padding:4px 6px}
-  table.dt td{padding:4px 6px;border-bottom:1px solid rgba(0,229,255,.1);word-break:break-word}
+  .relay-group{margin-top:8px;padding:8px 10px;border:1px solid rgba(0,229,255,.15);border-left:2px solid var(--cyan);border-radius:4px}
+  .relay-group-title{font-size:13px;font-weight:700;color:var(--cyan);margin-bottom:6px}
+  table.dt{width:100%;border-collapse:collapse;font-size:13px}
+  table.dt th{background:rgba(0,229,255,.12);color:#fff;text-align:left;padding:6px 8px}
+  table.dt td{padding:6px 8px;border-bottom:1px solid rgba(0,229,255,.1);word-break:break-word}
 `;
+
+function buildBodyHtml(query, answer, mainType) {
+  if (mainType === '母线接地') {
+    const pages = collectBusPages(query, answer);
+    if (!pages.length) {
+      return `<div class="screen-body solo"><div class="line-stage"><div class="line-page active">${renderPageGrid([])}</div></div></div>`;
+    }
+    const nav = pages.map((pg, i) =>
+      `<button type="button" class="line-pick${i === 0 ? ' active' : ''}" data-i="${i}">${esc(pg.name)}</button>`
+    ).join('');
+    const stage = pages.map((pg, i) =>
+      `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderPageGrid(pg.panels)}</div>`
+    ).join('');
+    return `<div class="screen-body bus-mode"><nav class="line-nav"><div class="line-nav-label">线路选择</div>${nav}</nav><div class="line-stage">${stage}</div></div>`;
+  }
+  let panels;
+  if (mainType === '跳闸') panels = collectTripPanels(query, answer);
+  else panels = collectGroundPanels(query, answer);
+  const syncIdx = panels.findIndex((p) => /信息同步/.test(p.title));
+  if (syncIdx >= 0) {
+    const [sync] = panels.splice(syncIdx, 1);
+    panels.push(sync);
+  }
+  return `<div class="screen-body solo"><div class="line-stage"><div class="line-page active">${renderPageGrid(panels)}</div></div></div>`;
+}
 
 function buildHtml({ query, answer }) {
   const mainType = pickMain(query);
@@ -717,16 +814,9 @@ function buildHtml({ query, answer }) {
     ? `${esc(extractKV(query)['厂站名称'] || '大珠山站')} ${esc(extractKV(query)['母线名称'] || '')} 母线接地监测大屏`
     : `${esc(lineName)} ${esc(typeLabel)}监测大屏`;
   const timeHtml = eventTime ? `<span class="time-keep">事件时间 ${esc(eventTime)}</span> · ` : '';
-  const daily = collectDailyPanels(query, answer, mainType);
-  const archive = collectArchivePanels(answer, mainType);
-  const syncIdx = archive.findIndex((p) => /信息同步/.test(p.title));
-  let ordered = daily.concat(archive);
-  if (syncIdx >= 0) {
-    const syncPanel = archive[syncIdx];
-    ordered = daily.concat(archive.filter((p) => !/信息同步/.test(p.title))).concat([syncPanel]);
-  }
-  const panelsHtml = ordered.map((p) => mkPanel(p.title, p.body, p.c, p.r)).join('');
   const kpiHtml = buildKpiStrip(query, answer, mainType);
+  const bodyHtml = buildBodyHtml(query, answer, mainType);
+  const script = mainType === '母线接地' ? LINE_PICK_SCRIPT : '';
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -742,8 +832,8 @@ function buildHtml({ query, answer }) {
       <div class="screen-sub">${timeHtml}黄岛故障信息分析 · ${todayTime()}</div>
     </header>
     ${kpiHtml}
-    <div class="screen-grid">${panelsHtml}</div>
-  </div>
+    ${bodyHtml}
+  </div>${script}
 </body>
 </html>`;
 }
