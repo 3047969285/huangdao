@@ -1,4 +1,4 @@
-/** 黄岛故障看板 v8：培小e国网风模板（1920×1080，一标题一面板）。FAULT_SEED_FILE 可离线重渲染。 */
+/** 黄岛故障看板 v9：培小e三栏主区模板（23%|1fr|26%，无四列等宽格）。FAULT_SEED_FILE 可离线重渲染。 */
 const fs = require('fs');
 const path = require('path');
 const biz = require('./index.js'); // 复用 API 调用逻辑
@@ -185,7 +185,7 @@ function numOf(v) {
   return m ? parseFloat(m[1]) : null;
 }
 
-// ---------------- 监测大屏 v8（培小e国网风模板） ----------------
+// ---------------- 监测大屏 v9（培小e三栏主区） ----------------
 
 const KPI_COLORS = ['#2f9bff', '#33d17a', '#37c8e8', '#a96bf2', '#ff9f43', '#f7c948'];
 
@@ -277,20 +277,73 @@ function renderBlockBody(block) {
   return renderSectionBody(block.title, block.lines);
 }
 
-function panelSpan(title) {
-  if (/信息同步|跳闸过程/.test(title)) return { c: 4, r: 1 };
-  if (/穿越|密集|试拉|联系人|概况/.test(title)) return { c: 2, r: 2 };
-  if (/电压|接地信息|过流|母线接地/.test(title)) return { c: 2, r: 1 };
-  return { c: 2, r: 1 };
+function mkPanel(title, body, opts) {
+  const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
+  const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
+  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="pc-inner">${body || '<div class="empty">无</div>'}</div></div></div>`;
 }
 
-function mkPanel(title, body, col, row) {
-  const sp = col ? { c: col, r: row || 1 } : panelSpan(title);
-  return `<div class="panel" style="grid-column:span ${sp.c};grid-row:span ${sp.r}"><div class="pt"><i></i><b>${esc(title)}</b></div><div class="pc"><div class="pc-inner">${body || '<div class="empty">无</div>'}</div></div></div>`;
+function renderColPanels(panels) {
+  return panels.map((p) => mkPanel(p.title, p.body, p.opts)).join('');
 }
 
-function renderPageGrid(panels) {
-  return `<div class="page-grid">${panels.map((p) => mkPanel(p.title, p.body, p.c, p.r)).join('')}</div>`;
+function mergeRightPanels(panels) {
+  if (!panels.length) return [];
+  if (panels.length === 1) return panels;
+  const body = panels.map((p) => `<div class="merge-seg"><div class="merge-h">${esc(p.title)}</div>${p.body}</div>`).join('');
+  return [{ title: '线路档案', body, opts: { em: `${panels.length}项` } }];
+}
+
+function distributePanels(panels) {
+  const left = [];
+  const center = [];
+  const right = [];
+  let sync = null;
+  panels.forEach((p) => {
+    if (/信息同步/.test(p.title)) {
+      sync = p;
+      return;
+    }
+    if (/跳闸过程|过流|三相电压|接地信息|母线接地/.test(p.title)) left.push(p);
+    else if (/穿越|密集|试拉/.test(p.title)) center.push(p);
+    else right.push(p);
+  });
+  const leftOut = left.map((p, i) => ({
+    ...p,
+    opts: { flex: left.length > 1 ? (i === 0 ? '1.3' : '0.7') : undefined, em: p.opts && p.opts.em },
+  }));
+  const centerOut = center.map((p, i) => ({
+    ...p,
+    opts: {
+      flex: center.length > 1 ? (i === 0 ? '1.25' : '1.35') : undefined,
+      em: p.opts && p.opts.em,
+    },
+  }));
+  return { left: leftOut, center: centerOut, right: mergeRightPanels(right), sync };
+}
+
+function renderThreeColumns(layout) {
+  const mkCol = (items) => `<div class="col">${items.length ? renderColPanels(items) : mkPanel('—', '<div class="empty">无</div>')}</div>`;
+  return `<div class="main">${mkCol(layout.left)}${mkCol(layout.center)}${mkCol(layout.right)}</div>`;
+}
+
+function renderBusContentCols(layout) {
+  return `<div class="content-cols"><div class="col">${renderColPanels(layout.center)}</div><div class="col">${renderColPanels(layout.right)}</div></div>`;
+}
+
+function buildTickerHtml(answer, syncPanel) {
+  let text = '';
+  if (syncPanel && syncPanel.raw) text = syncPanel.raw;
+  else {
+    const s = parseAnswerSections(answer).find((x) => /信息同步/.test(x.title));
+    if (s) text = s.lines.join(' ').trim();
+    if (!text) {
+      const b = parseAnswerBlocks(answer).find((x) => /信息同步/.test(x.title));
+      if (b) text = b.lines.join(' ').trim();
+    }
+  }
+  if (!text) text = '黄岛故障信息分析监测平台';
+  return `<div class="ticker"><div class="tl">信息同步</div><div class="tv"><span>${esc(text)}</span></div></div>`;
 }
 
 function parseLineSubs(lines) {
@@ -401,7 +454,7 @@ function collectBusPages(query, answer) {
   return pages;
 }
 
-const LINE_PICK_SCRIPT = `<script>(function(){var btns=document.querySelectorAll(".line-pick"),pages=document.querySelectorAll(".line-page");btns.forEach(function(b){b.addEventListener("click",function(){var i=b.getAttribute("data-i");btns.forEach(function(x){x.classList.remove("active");});pages.forEach(function(p){p.classList.remove("active");});b.classList.add("active");var pg=document.querySelector('.line-page[data-i="'+i+'"]');if(pg){pg.classList.add("active");var g=pg.querySelector(".page-grid");if(g)g.scrollTop=0;}});});})();</script>`;
+const LINE_PICK_SCRIPT = `<script>(function(){var btns=document.querySelectorAll(".line-pick"),pages=document.querySelectorAll(".line-page");btns.forEach(function(b){b.addEventListener("click",function(){var i=b.getAttribute("data-i");btns.forEach(function(x){x.classList.remove("active");});pages.forEach(function(p){p.classList.remove("active");});b.classList.add("active");var pg=document.querySelector('.line-page[data-i="'+i+'"]');if(pg)pg.classList.add("active");}});});})();</script>`;
 
 const CLOCK_SCRIPT = `<script>(function(){function tick(){var n=new Date(),p=function(s){return String(s).padStart(2,"0")};var el=document.getElementById("clk"),dt=document.getElementById("dt");if(el)el.textContent=p(n.getHours())+":"+p(n.getMinutes())+":"+p(n.getSeconds());if(dt)dt.textContent=n.getFullYear()+"-"+p(n.getMonth()+1)+"-"+p(n.getDate());}tick();setInterval(tick,1000);})();</script>`;
 
@@ -416,7 +469,7 @@ function buildKpiStrip(query, answer, mainType) {
 function buildTripFlow(query) {
   const kv = extractKV(query);
   const steps = [['保护动作', kv['动作类型'] || '—'], ['跳闸前接地', kv['跳闸前接地情况'] || '—'], ['跳闸后复归', kv['跳闸后接地复归情况'] || '—'], ['损失电流', kv['损失负荷电流'] || '—']];
-  return `<div class="flow-4">${steps.map(([l, v], i) => `<div class="flow-step"><div class="fs-n">${i + 1}</div><div class="fs-v">${esc(v)}</div><div class="fs-l">${esc(l)}</div></div>`).join('')}</div>`;
+  return `<div class="flow-v">${steps.map(([l, v], i) => `<div class="flow-step"><div class="fs-n">${i + 1}</div><div class="fs-body"><div class="fs-v">${esc(v)}</div><div class="fs-l">${esc(l)}</div></div></div>`).join('')}</div>`;
 }
 
 function buildOcPanel(query) {
@@ -720,21 +773,19 @@ const CSS = `
   .hd h1{font-size:28px;letter-spacing:5px;font-weight:700;color:#fff;text-shadow:0 0 18px rgba(45,140,255,.8),0 0 40px rgba(45,140,255,.4)}
   .hd .deco{height:12px;margin:6px auto 0;max-width:1400px;background:radial-gradient(ellipse at 50% 0,rgba(64,170,255,.55),transparent 70%);position:relative}
   .hd .deco::before{content:"";position:absolute;left:0;right:0;top:5px;height:2px;background:linear-gradient(90deg,transparent,#2f9bff 30%,#7fd4ff 50%,#2f9bff 70%,transparent);box-shadow:0 0 12px #2f9bff}
-  .hd .sub{font-size:12px;color:#6f9cc0;letter-spacing:2px;margin-top:2px}
-  .hd .sub .time-keep{white-space:nowrap}
+  .hd .badge{display:inline-block;border:1px solid rgba(64,158,255,.45);color:#7fc3ff;border-radius:3px;font-size:11px;padding:2px 10px;margin:6px 4px 0;letter-spacing:1px;background:rgba(20,60,100,.25)}
   .hd .clock{position:absolute;right:8px;top:18px;text-align:right;font-size:12px;color:#7fb6dd;line-height:1.7}
   .hd .clock b{font-size:18px;color:#eaf6ff;font-family:Consolas,monospace;letter-spacing:1px}
   .hd .logo{position:absolute;left:14px;top:16px;display:flex;align-items:center;gap:8px}
   .hd .logo .mark{width:34px;height:34px;border-radius:50%;border:2px solid #2f9bff;display:flex;align-items:center;justify-content:center;color:#7fd4ff;font-size:11px;font-weight:700;box-shadow:0 0 12px rgba(47,155,255,.6)}
   .hd .logo span{font-size:12px;color:#8db8dc;letter-spacing:2px;line-height:1.5;text-align:left}
-  .kpis{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:8px 0}
-  .kpi{position:relative;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);padding:10px 4px 8px;text-align:center;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+  .kpis{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:10px 0}
+  .kpi{position:relative;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);padding:12px 4px 10px;text-align:center;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
   .kpi::before{content:"";position:absolute;top:0;left:12%;right:12%;height:2px;background:linear-gradient(90deg,transparent,var(--kc,#2f9bff),transparent)}
-  .kv{font-size:20px;font-weight:700;color:var(--kc,#2f9bff);text-shadow:0 0 14px var(--kg,rgba(47,155,255,.5));font-family:"DIN Alternate",Consolas,"Microsoft YaHei",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kl{font-size:11px;color:#7ea6c8;margin-top:4px;letter-spacing:0}
-  .main{flex:1;min-height:0;display:grid;gap:12px}
-  .main.solo-main{grid-template-columns:1fr}
-  .main.bus-main{grid-template-columns:22% 1fr}
+  .kv{font-size:24px;font-weight:700;color:var(--kc,#2f9bff);text-shadow:0 0 14px var(--kg,rgba(47,155,255,.5));font-family:"DIN Alternate",Consolas,"Microsoft YaHei",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kl{font-size:11px;color:#7ea6c8;margin-top:5px;letter-spacing:0}
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:23% 1fr 26%;gap:12px}
+  .main.bus-main{grid-template-columns:23% 1fr}
   .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
   .nav-panel{flex:1;min-height:0}
   .line-nav-inner{display:flex;flex-direction:column;gap:10px;padding:4px 2px}
@@ -742,12 +793,12 @@ const CSS = `
   .line-pick::before{content:"";position:absolute;top:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,rgba(64,158,255,.35),transparent)}
   .line-pick.active{color:#7fd4ff;border-color:rgba(64,158,255,.55);box-shadow:0 0 14px rgba(47,155,255,.45);background:linear-gradient(180deg,rgba(20,60,100,.9),rgba(12,36,62,.9))}
   .line-pick.active::before{background:linear-gradient(90deg,transparent,#2f9bff,transparent)}
-  .line-stage{flex:1;min-height:0;min-width:0;position:relative}
+  .content-wrap{min-height:0;min-width:0;display:flex;flex-direction:column}
+  .line-stage{flex:1;min-height:0;position:relative}
   .line-page{display:none;position:absolute;inset:0}
   .line-page.active{display:block}
-  .page-grid{position:absolute;inset:0;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:minmax(0,1fr);gap:12px;overflow:auto}
-  .page-grid::-webkit-scrollbar{width:4px}.page-grid::-webkit-scrollbar-thumb{background:rgba(64,158,255,.35)}
-  .panel{min-height:0;min-width:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(10,34,58,.9),rgba(6,20,38,.92));border:1px solid rgba(64,158,255,.22);position:relative}
+  .content-cols{position:absolute;inset:0;display:grid;grid-template-columns:1fr 34%;gap:12px}
+  .panel{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(10,34,58,.9),rgba(6,20,38,.92));border:1px solid rgba(64,158,255,.22);position:relative}
   .panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;border-color:#3fa2ff;border-style:solid;z-index:2;pointer-events:none}
   .panel::before{top:-1px;left:-1px;border-width:2px 0 0 2px}
   .panel::after{bottom:-1px;right:-1px;border-width:0 2px 2px 0}
@@ -765,11 +816,19 @@ const CSS = `
   .cl-row{display:flex;justify-content:space-between;gap:10px;padding:6px 8px;background:rgba(20,60,100,.15);border-bottom:1px dashed rgba(64,158,255,.12);font-size:13px}
   .cl-row span{color:#7ea6c8;flex-shrink:0}
   .cl-row b{color:#eaf6ff;font-weight:600;text-align:right;word-break:break-all}
-  .flow-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;height:100%;align-content:center}
-  .flow-step{text-align:center;padding:12px 8px;background:rgba(20,60,100,.2);border:1px solid rgba(64,158,255,.22)}
-  .fs-n{width:32px;height:32px;border-radius:50%;background:linear-gradient(#7fd4ff,#2f9bff);color:#03121f;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;box-shadow:0 0 10px rgba(47,155,255,.5)}
-  .fs-v{margin-top:10px;font-size:16px;font-weight:700;color:#eaf6ff}
-  .fs-l{font-size:11px;color:#7ea6c8;margin-top:3px}
+  .flow-v{display:flex;flex-direction:column;gap:10px;height:100%;justify-content:center}
+  .flow-step{display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:center;padding:10px;background:rgba(20,60,100,.2);border:1px solid rgba(64,158,255,.22)}
+  .fs-n{width:32px;height:32px;border-radius:50%;background:linear-gradient(#7fd4ff,#2f9bff);color:#03121f;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;box-shadow:0 0 10px rgba(47,155,255,.5)}
+  .fs-v{font-size:15px;font-weight:700;color:#eaf6ff}
+  .fs-l{font-size:11px;color:#7ea6c8;margin-top:2px}
+  .merge-seg{margin-bottom:12px;padding-bottom:10px;border-bottom:1px dashed rgba(64,158,255,.15)}
+  .merge-seg:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .merge-h{font-size:12px;font-weight:700;color:#7fd4ff;margin-bottom:8px;letter-spacing:1px}
+  .ticker{flex:0 0 auto;margin-top:10px;border:1px solid rgba(64,158,255,.22);background:rgba(8,26,46,.9);display:flex;align-items:center;overflow:hidden;height:34px}
+  .ticker .tl{flex:0 0 auto;padding:0 14px;height:100%;display:flex;align-items:center;background:linear-gradient(90deg,#134a7c,#0d2c4a);color:#7fd4ff;font-size:12px;letter-spacing:2px;border-right:1px solid rgba(64,158,255,.35)}
+  .ticker .tv{flex:1;white-space:nowrap;overflow:hidden}
+  .ticker .tv span{display:inline-block;padding-left:100%;font-size:12px;color:#9fc4de;animation:mv 38s linear infinite}
+  @keyframes mv{to{transform:translateX(-100%)}}
   .ring-row{display:flex;justify-content:space-around;align-items:center;height:100%;gap:10px}
   .ring-box{position:relative;width:96px;height:96px}
   .ring-svg{width:96px;height:96px}
@@ -809,34 +868,33 @@ const CSS = `
 function buildBodyHtml(query, answer, mainType) {
   if (mainType === '母线接地') {
     const pages = collectBusPages(query, answer);
+    let sync = null;
+    const syncSec = parseAnswerBlocks(answer).find((b) => /信息同步/.test(b.title));
+    if (syncSec) sync = { raw: syncSec.lines.join(' ').trim() };
     if (!pages.length) {
-      return `<div class="main solo-main"><div class="col"><div class="line-stage"><div class="line-page active">${renderPageGrid([])}</div></div></div></div>`;
+      return { main: renderThreeColumns({ left: [], center: [], right: [] }), ticker: buildTickerHtml(answer, sync) };
     }
     const nav = pages.map((pg, i) =>
       `<button type="button" class="line-pick${i === 0 ? ' active' : ''}" data-i="${i}">${esc(pg.name)}</button>`
     ).join('');
-    const stage = pages.map((pg, i) =>
-      `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderPageGrid(pg.panels)}</div>`
-    ).join('');
-    return `<div class="main bus-main">
+    const stage = pages.map((pg, i) => {
+      const layout = distributePanels(pg.panels);
+      return `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderBusContentCols(layout)}</div>`;
+    }).join('');
+    const main = `<div class="main bus-main">
       <div class="col nav-col">
         <div class="panel nav-panel">
           <div class="pt"><i></i><b>线路选择</b><em>${pages.length}条</em></div>
           <div class="pc"><div class="pc-inner line-nav-inner">${nav}</div></div>
         </div>
       </div>
-      <div class="col content-col"><div class="line-stage">${stage}</div></div>
+      <div class="content-wrap"><div class="line-stage">${stage}</div></div>
     </div>`;
+    return { main, ticker: buildTickerHtml(answer, sync) };
   }
-  let panels;
-  if (mainType === '跳闸') panels = collectTripPanels(query, answer);
-  else panels = collectGroundPanels(query, answer);
-  const syncIdx = panels.findIndex((p) => /信息同步/.test(p.title));
-  if (syncIdx >= 0) {
-    const [sync] = panels.splice(syncIdx, 1);
-    panels.push(sync);
-  }
-  return `<div class="main solo-main"><div class="col"><div class="line-stage"><div class="line-page active">${renderPageGrid(panels)}</div></div></div></div>`;
+  const panels = mainType === '跳闸' ? collectTripPanels(query, answer) : collectGroundPanels(query, answer);
+  const layout = distributePanels(panels);
+  return { main: renderThreeColumns(layout), ticker: buildTickerHtml(answer, layout.sync) };
 }
 
 function buildHtml({ query, answer }) {
@@ -847,13 +905,13 @@ function buildHtml({ query, answer }) {
   const title = mainType === '母线接地'
     ? `${esc(extractKV(query)['厂站名称'] || '大珠山站')} ${esc(extractKV(query)['母线名称'] || '')} 母线接地监测大屏`
     : `${esc(lineName)} ${esc(typeLabel)}监测大屏`;
-  const timeHtml = eventTime ? `<span class="time-keep">事件时间 ${esc(eventTime)}</span> · ` : '';
   const now = todayTime();
   const clk = now.split(' ')[1] || '';
   const dt = now.split(' ')[0] || '';
   const kpiHtml = buildKpiStrip(query, answer, mainType);
-  const bodyHtml = buildBodyHtml(query, answer, mainType);
+  const { main: mainHtml, ticker: tickerHtml } = buildBodyHtml(query, answer, mainType);
   const script = (mainType === '母线接地' ? LINE_PICK_SCRIPT : '') + CLOCK_SCRIPT;
+  const badge = eventTime ? `<div class="badge">事件 ${esc(eventTime)}</div>` : '';
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -869,11 +927,12 @@ function buildHtml({ query, answer }) {
     <div class="logo"><div class="mark">HD</div><span>黄岛<br>故障信息分析</span></div>
     <h1>${title}</h1>
     <div class="deco"></div>
-    <div class="sub">${timeHtml}黄岛故障信息分析 · ${esc(now)}</div>
+    ${badge}
     <div class="clock"><b id="clk">${esc(clk)}</b><br><span id="dt">${esc(dt)}</span></div>
   </div>
   ${kpiHtml}
-  ${bodyHtml}
+  ${mainHtml}
+  ${tickerHtml}
 </div>${script}
 </body>
 </html>`;
