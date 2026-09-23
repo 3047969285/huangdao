@@ -1,4 +1,4 @@
-/** 黄岛故障看板 v9：培小e三栏主区模板（23%|1fr|26%，无四列等宽格）。FAULT_SEED_FILE 可离线重渲染。 */
+/** 黄岛故障看板 v10：培小e满屏三栏壳（100% 视口撑满，23%|1fr|26%）。FAULT_SEED_FILE 可离线重渲染。 */
 const fs = require('fs');
 const path = require('path');
 const biz = require('./index.js'); // 复用 API 调用逻辑
@@ -185,7 +185,7 @@ function numOf(v) {
   return m ? parseFloat(m[1]) : null;
 }
 
-// ---------------- 监测大屏 v9（培小e三栏主区） ----------------
+// ---------------- 监测大屏 v10（培小e满屏三栏壳） ----------------
 
 const KPI_COLORS = ['#2f9bff', '#33d17a', '#37c8e8', '#a96bf2', '#ff9f43', '#f7c948'];
 
@@ -209,7 +209,7 @@ function hBarRow(label, val, max) {
 
 function compactList(pairs) {
   if (!pairs.length) return '<div class="empty">无</div>';
-  return `<div class="clist">${pairs.map(([k, v]) => `<div class="cl-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+  return `<div class="clist fill-y">${pairs.map(([k, v]) => `<div class="cl-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
 }
 
 function renderTrialList(lines) {
@@ -237,12 +237,13 @@ function renderForestBars(lines) {
     return t.length ? `<div class="narr">${esc(t.join('\n'))}</div>` : '<div class="empty">无</div>';
   }
   const maxLen = Math.max(...records.map((r) => numOf(r['穿越长度kM'] || r['通道长度公里']) || 0.1), 0.5);
-  return records.map((r) => {
+  const bars = records.map((r) => {
     const lbl = r['杆号区段'] || r['起始点'] || r['区段描述'] || '区段';
     const val = r['穿越长度kM'] || r['通道长度公里'] || '—';
     const disp = String(val).includes('km') ? val : `${val}km`;
     return hBarRow(lbl, disp, maxLen);
   }).join('');
+  return `<div class="bars-wrap fill-y">${bars}</div>`;
 }
 
 function renderSectionBody(title, lines) {
@@ -280,18 +281,23 @@ function renderBlockBody(block) {
 function mkPanel(title, body, opts) {
   const em = opts && opts.em ? `<em>${esc(opts.em)}</em>` : '';
   const flex = opts && opts.flex ? ` style="flex:${opts.flex}"` : '';
-  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="pc-inner">${body || '<div class="empty">无</div>'}</div></div></div>`;
+  return `<div class="panel"${flex}><div class="pt"><i></i><b>${esc(title)}</b>${em}</div><div class="pc"><div class="tbl">${body || '<div class="empty">无</div>'}</div></div></div>`;
 }
 
 function renderColPanels(panels) {
   return panels.map((p) => mkPanel(p.title, p.body, p.opts)).join('');
 }
 
-function mergeRightPanels(panels) {
-  if (!panels.length) return [];
-  if (panels.length === 1) return panels;
+function mergePanelsBlock(panels, blockTitle) {
+  if (!panels.length) return null;
+  if (panels.length === 1) return panels[0];
   const body = panels.map((p) => `<div class="merge-seg"><div class="merge-h">${esc(p.title)}</div>${p.body}</div>`).join('');
-  return [{ title: '线路档案', body, opts: { em: `${panels.length}项` } }];
+  return { title: blockTitle, body, opts: { em: `${panels.length}项`, flex: '1' } };
+}
+
+function mergeRightPanels(panels) {
+  const m = mergePanelsBlock(panels, '线路档案');
+  return m ? [m] : [];
 }
 
 function distributePanels(panels) {
@@ -308,27 +314,44 @@ function distributePanels(panels) {
     else if (/穿越|密集|试拉/.test(p.title)) center.push(p);
     else right.push(p);
   });
-  const leftOut = left.map((p, i) => ({
-    ...p,
-    opts: { flex: left.length > 1 ? (i === 0 ? '1.3' : '0.7') : undefined, em: p.opts && p.opts.em },
-  }));
   const centerOut = center.map((p, i) => ({
     ...p,
     opts: {
-      flex: center.length > 1 ? (i === 0 ? '1.25' : '1.35') : undefined,
+      flex: center.length > 1 ? (i === 0 ? '1.25' : '1.35') : '1',
       em: p.opts && p.opts.em,
     },
   }));
-  return { left: leftOut, center: centerOut, right: mergeRightPanels(right), sync };
+  const leftTitle = /跳闸|过流/.test(left.map((p) => p.title).join('')) ? '跳闸概况' : (/电压|接地/.test(left.map((p) => p.title).join('')) ? '接地概况' : '母线概况');
+  const leftMerged = mergePanelsBlock(left, leftTitle);
+  return {
+    left: leftMerged ? [leftMerged] : [],
+    center: centerOut,
+    right: mergeRightPanels(right),
+    sync,
+  };
 }
 
 function renderThreeColumns(layout) {
-  const mkCol = (items) => `<div class="col">${items.length ? renderColPanels(items) : mkPanel('—', '<div class="empty">无</div>')}</div>`;
-  return `<div class="main">${mkCol(layout.left)}${mkCol(layout.center)}${mkCol(layout.right)}</div>`;
+  const left = layout.left[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
+  const center = layout.center.length ? layout.center : [{ title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } }];
+  const right = layout.right[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
+  left.opts = { flex: '1', em: left.opts && left.opts.em };
+  right.opts = { flex: '1', em: right.opts && right.opts.em };
+  return `<div class="main">
+    <div class="col col-left">${mkPanel(left.title, left.body, left.opts)}</div>
+    <div class="col col-mid">${renderColPanels(center)}</div>
+    <div class="col col-right">${mkPanel(right.title, right.body, right.opts)}</div>
+  </div>`;
 }
 
 function renderBusContentCols(layout) {
-  return `<div class="content-cols"><div class="col">${renderColPanels(layout.center)}</div><div class="col">${renderColPanels(layout.right)}</div></div>`;
+  const center = layout.center.length ? layout.center : [{ title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } }];
+  const right = layout.right[0] || { title: '—', body: '<div class="empty">无</div>', opts: { flex: '1' } };
+  right.opts = { flex: '1', em: right.opts && right.opts.em };
+  return `<div class="content-cols">
+    <div class="col col-mid">${renderColPanels(center)}</div>
+    <div class="col col-right">${mkPanel(right.title, right.body, right.opts)}</div>
+  </div>`;
 }
 
 function buildTickerHtml(answer, syncPanel) {
@@ -469,7 +492,7 @@ function buildKpiStrip(query, answer, mainType) {
 function buildTripFlow(query) {
   const kv = extractKV(query);
   const steps = [['保护动作', kv['动作类型'] || '—'], ['跳闸前接地', kv['跳闸前接地情况'] || '—'], ['跳闸后复归', kv['跳闸后接地复归情况'] || '—'], ['损失电流', kv['损失负荷电流'] || '—']];
-  return `<div class="flow-v">${steps.map(([l, v], i) => `<div class="flow-step"><div class="fs-n">${i + 1}</div><div class="fs-body"><div class="fs-v">${esc(v)}</div><div class="fs-l">${esc(l)}</div></div></div>`).join('')}</div>`;
+  return `<div class="flow-v fill-y">${steps.map(([l, v], i) => `<div class="flow-step"><div class="fs-n">${i + 1}</div><div class="fs-body"><div class="fs-v">${esc(v)}</div><div class="fs-l">${esc(l)}</div></div></div>`).join('')}</div>`;
 }
 
 function buildOcPanel(query) {
@@ -483,7 +506,7 @@ function buildVoltPanel(query) {
   const ua = kv['Ua'] || /Ua[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
   const ub = kv['Ub'] || /Ub[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
   const uc = kv['Uc'] || /Uc[：:]\s*([^\s，,；;（(]+)/.exec(text)?.[1] || '';
-  return `<div class="ring-row">${ringGauge('Ua', ua, 10)}${ringGauge('Ub', ub, 10)}${ringGauge('Uc', uc, 10)}</div>`;
+  return `<div class="ring-row fill-y">${ringGauge('Ua', ua, 10)}${ringGauge('Ub', ub, 10)}${ringGauge('Uc', uc, 10)}</div>`;
 }
 
 function buildGroundInfo(query) {
@@ -762,74 +785,76 @@ function renderRowTables(lines) {
 
 const CSS = `
   *{margin:0;padding:0;box-sizing:border-box}
-  html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#03121f;color:#cfe6f7}
+  html,body{width:100%;height:100%;overflow:hidden;font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#03121f;color:#cfe6f7;position:relative}
   .bg{position:fixed;inset:0;z-index:0;background:
     radial-gradient(ellipse at 50% -10%,rgba(24,90,150,.35),transparent 55%),
     radial-gradient(ellipse at 15% 100%,rgba(16,70,120,.25),transparent 50%),
     radial-gradient(ellipse at 85% 100%,rgba(16,70,120,.25),transparent 50%)}
   .bg::after{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(64,158,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(64,158,255,.05) 1px,transparent 1px);background-size:46px 46px}
-  .wrap{position:relative;z-index:1;width:1920px;height:1080px;display:flex;flex-direction:column;padding:0 18px 14px}
-  .hd{flex:0 0 auto;text-align:center;padding:14px 0 4px;position:relative}
-  .hd h1{font-size:28px;letter-spacing:5px;font-weight:700;color:#fff;text-shadow:0 0 18px rgba(45,140,255,.8),0 0 40px rgba(45,140,255,.4)}
+  .wrap{position:relative;z-index:1;min-height:100%;height:100%;display:flex;flex-direction:column;padding:0 18px 10px}
+  .hd{flex:0 0 auto;text-align:center;padding:16px 0 6px;position:relative}
+  .hd h1{font-size:clamp(20px,2.2vw,32px);letter-spacing:6px;font-weight:700;color:#fff;text-shadow:0 0 18px rgba(45,140,255,.8),0 0 40px rgba(45,140,255,.4)}
   .hd .deco{height:12px;margin:6px auto 0;max-width:1400px;background:radial-gradient(ellipse at 50% 0,rgba(64,170,255,.55),transparent 70%);position:relative}
   .hd .deco::before{content:"";position:absolute;left:0;right:0;top:5px;height:2px;background:linear-gradient(90deg,transparent,#2f9bff 30%,#7fd4ff 50%,#2f9bff 70%,transparent);box-shadow:0 0 12px #2f9bff}
   .hd .badge{display:inline-block;border:1px solid rgba(64,158,255,.45);color:#7fc3ff;border-radius:3px;font-size:11px;padding:2px 10px;margin:6px 4px 0;letter-spacing:1px;background:rgba(20,60,100,.25)}
-  .hd .clock{position:absolute;right:8px;top:18px;text-align:right;font-size:12px;color:#7fb6dd;line-height:1.7}
+  .hd .clock{position:absolute;right:8px;top:22px;text-align:right;font-size:12px;color:#7fb6dd;line-height:1.7}
   .hd .clock b{font-size:18px;color:#eaf6ff;font-family:Consolas,monospace;letter-spacing:1px}
-  .hd .logo{position:absolute;left:14px;top:16px;display:flex;align-items:center;gap:8px}
+  .hd .logo{position:absolute;left:14px;top:20px;display:flex;align-items:center;gap:8px}
   .hd .logo .mark{width:34px;height:34px;border-radius:50%;border:2px solid #2f9bff;display:flex;align-items:center;justify-content:center;color:#7fd4ff;font-size:11px;font-weight:700;box-shadow:0 0 12px rgba(47,155,255,.6)}
   .hd .logo span{font-size:12px;color:#8db8dc;letter-spacing:2px;line-height:1.5;text-align:left}
   .kpis{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:10px 0}
   .kpi{position:relative;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);padding:12px 4px 10px;text-align:center;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
   .kpi::before{content:"";position:absolute;top:0;left:12%;right:12%;height:2px;background:linear-gradient(90deg,transparent,var(--kc,#2f9bff),transparent)}
-  .kv{font-size:24px;font-weight:700;color:var(--kc,#2f9bff);text-shadow:0 0 14px var(--kg,rgba(47,155,255,.5));font-family:"DIN Alternate",Consolas,"Microsoft YaHei",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kv{font-size:clamp(18px,1.8vw,28px);font-weight:700;color:var(--kc,#2f9bff);text-shadow:0 0 14px var(--kg,rgba(47,155,255,.5));font-family:"DIN Alternate",Consolas,"Microsoft YaHei",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .kl{font-size:11px;color:#7ea6c8;margin-top:5px;letter-spacing:0}
   .main{flex:1;min-height:0;display:grid;grid-template-columns:23% 1fr 26%;gap:12px}
   .main.bus-main{grid-template-columns:23% 1fr}
-  .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
-  .nav-panel{flex:1;min-height:0}
-  .line-nav-inner{display:flex;flex-direction:column;gap:10px;padding:4px 2px}
-  .line-pick{position:relative;width:100%;text-align:left;padding:14px 12px;font-size:14px;font-weight:600;line-height:1.4;color:#7ea6c8;cursor:pointer;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
-  .line-pick::before{content:"";position:absolute;top:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,rgba(64,158,255,.35),transparent)}
-  .line-pick.active{color:#7fd4ff;border-color:rgba(64,158,255,.55);box-shadow:0 0 14px rgba(47,155,255,.45);background:linear-gradient(180deg,rgba(20,60,100,.9),rgba(12,36,62,.9))}
-  .line-pick.active::before{background:linear-gradient(90deg,transparent,#2f9bff,transparent)}
-  .content-wrap{min-height:0;min-width:0;display:flex;flex-direction:column}
-  .line-stage{flex:1;min-height:0;position:relative}
+  .content-wrap{min-height:0;min-width:0;height:100%;display:flex;flex-direction:column}
+  .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0;height:100%}
+  .line-stage{flex:1;min-height:0;position:relative;height:100%}
   .line-page{display:none;position:absolute;inset:0}
   .line-page.active{display:block}
-  .content-cols{position:absolute;inset:0;display:grid;grid-template-columns:1fr 34%;gap:12px}
+  .content-cols{position:absolute;inset:0;display:grid;grid-template-columns:1fr 34%;gap:12px;height:100%}
   .panel{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(10,34,58,.9),rgba(6,20,38,.92));border:1px solid rgba(64,158,255,.22);position:relative}
   .panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;border-color:#3fa2ff;border-style:solid;z-index:2;pointer-events:none}
   .panel::before{top:-1px;left:-1px;border-width:2px 0 0 2px}
   .panel::after{bottom:-1px;right:-1px;border-width:0 2px 2px 0}
   .pt{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(64,158,255,.18);background:linear-gradient(90deg,rgba(47,155,255,.16),transparent 65%)}
   .pt i{width:4px;height:14px;background:linear-gradient(#7fd4ff,#2f9bff);box-shadow:0 0 8px #2f9bff}
-  .pt b{font-size:13.5px;color:#dff0ff;letter-spacing:1px;font-weight:600}
+  .pt b{font-size:13.5px;color:#dff0ff;letter-spacing:2px;font-weight:600}
   .pt em{margin-left:auto;font-style:normal;font-size:10.5px;color:#5d89ad;letter-spacing:1px}
   .pc{flex:1;min-height:0;position:relative}
-  .pc-inner{position:absolute;inset:0;overflow:auto;padding:10px 12px;font-size:13px;line-height:1.55}
-  .pc-inner::-webkit-scrollbar{width:4px}.pc-inner::-webkit-scrollbar-thumb{background:rgba(64,158,255,.35)}
-  .empty{color:#5d89ad;text-align:center;padding:18px 0;font-size:13px}
+  .tbl{position:absolute;inset:0;overflow:auto;padding:8px 10px;font-size:13px;line-height:1.55}
+  .tbl::-webkit-scrollbar{width:4px}.tbl::-webkit-scrollbar-thumb{background:rgba(64,158,255,.35)}
+  .fill-y{min-height:100%;height:100%;display:flex;flex-direction:column}
+  .line-nav-inner{display:flex;flex-direction:column;gap:10px;height:100%;padding:2px}
+  .line-pick{position:relative;flex:1;min-height:52px;display:flex;align-items:center;width:100%;text-align:left;padding:14px 12px;font-size:14px;font-weight:600;line-height:1.4;color:#7ea6c8;cursor:pointer;background:linear-gradient(180deg,rgba(14,44,76,.85),rgba(8,26,46,.85));border:1px solid rgba(64,158,255,.28);clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+  .line-pick::before{content:"";position:absolute;top:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,rgba(64,158,255,.35),transparent)}
+  .line-pick.active{color:#7fd4ff;border-color:rgba(64,158,255,.55);box-shadow:0 0 14px rgba(47,155,255,.45);background:linear-gradient(180deg,rgba(20,60,100,.9),rgba(12,36,62,.9))}
+  .line-pick.active::before{background:linear-gradient(90deg,transparent,#2f9bff,transparent)}
+  .bars-wrap{flex:1;display:flex;flex-direction:column;justify-content:space-evenly;min-height:100%}
+  .empty{color:#5d89ad;display:flex;align-items:center;justify-content:center;min-height:100%;font-size:13px}
   .narr{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65;color:#a9cbe4}
   .sync-txt{font-size:13px;color:#9fc4de}
-  .clist{display:flex;flex-direction:column;gap:5px}
+  .clist{gap:0;justify-content:space-evenly}
+  .clist .cl-row{flex:1;display:flex;align-items:center}
   .cl-row{display:flex;justify-content:space-between;gap:10px;padding:6px 8px;background:rgba(20,60,100,.15);border-bottom:1px dashed rgba(64,158,255,.12);font-size:13px}
   .cl-row span{color:#7ea6c8;flex-shrink:0}
   .cl-row b{color:#eaf6ff;font-weight:600;text-align:right;word-break:break-all}
-  .flow-v{display:flex;flex-direction:column;gap:10px;height:100%;justify-content:center}
-  .flow-step{display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:center;padding:10px;background:rgba(20,60,100,.2);border:1px solid rgba(64,158,255,.22)}
+  .flow-v{justify-content:space-evenly;gap:8px}
+  .flow-step{flex:1;display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:center;padding:10px;background:rgba(20,60,100,.2);border:1px solid rgba(64,158,255,.22)}
   .fs-n{width:32px;height:32px;border-radius:50%;background:linear-gradient(#7fd4ff,#2f9bff);color:#03121f;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;box-shadow:0 0 10px rgba(47,155,255,.5)}
   .fs-v{font-size:15px;font-weight:700;color:#eaf6ff}
   .fs-l{font-size:11px;color:#7ea6c8;margin-top:2px}
   .merge-seg{margin-bottom:12px;padding-bottom:10px;border-bottom:1px dashed rgba(64,158,255,.15)}
   .merge-seg:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
   .merge-h{font-size:12px;font-weight:700;color:#7fd4ff;margin-bottom:8px;letter-spacing:1px}
-  .ticker{flex:0 0 auto;margin-top:10px;border:1px solid rgba(64,158,255,.22);background:rgba(8,26,46,.9);display:flex;align-items:center;overflow:hidden;height:34px}
+  .ticker{flex:0 0 auto;border:1px solid rgba(64,158,255,.22);background:rgba(8,26,46,.9);display:flex;align-items:center;overflow:hidden;height:34px}
   .ticker .tl{flex:0 0 auto;padding:0 14px;height:100%;display:flex;align-items:center;background:linear-gradient(90deg,#134a7c,#0d2c4a);color:#7fd4ff;font-size:12px;letter-spacing:2px;border-right:1px solid rgba(64,158,255,.35)}
   .ticker .tv{flex:1;white-space:nowrap;overflow:hidden}
   .ticker .tv span{display:inline-block;padding-left:100%;font-size:12px;color:#9fc4de;animation:mv 38s linear infinite}
   @keyframes mv{to{transform:translateX(-100%)}}
-  .ring-row{display:flex;justify-content:space-around;align-items:center;height:100%;gap:10px}
+  .ring-row{justify-content:space-evenly;align-items:center;gap:10px}
   .ring-box{position:relative;width:96px;height:96px}
   .ring-svg{width:96px;height:96px}
   .ring-track{fill:none;stroke:rgba(64,158,255,.15);stroke-width:8}
@@ -837,7 +862,7 @@ const CSS = `
   .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
   .ring-center b{font-size:16px;font-weight:800}
   .ring-center span{font-size:11px;color:#7ea6c8;margin-top:2px}
-  .hbar{display:grid;grid-template-columns:1.1fr 2fr auto;gap:8px;align-items:center;margin-bottom:8px;font-size:12px}
+  .hbar{display:grid;grid-template-columns:1.1fr 2fr auto;gap:8px;align-items:center;margin-bottom:0;font-size:12px;flex:1}
   .hb-lbl{color:#7ea6c8;line-height:1.35}
   .hb-track{height:9px;background:rgba(64,158,255,.12);border-radius:4px;overflow:hidden}
   .hb-fill{height:100%;background:linear-gradient(90deg,#1565c0,#4fc3f7);border-radius:4px;box-shadow:0 0 6px rgba(79,195,247,.4)}
@@ -882,12 +907,7 @@ function buildBodyHtml(query, answer, mainType) {
       return `<div class="line-page${i === 0 ? ' active' : ''}" data-i="${i}">${renderBusContentCols(layout)}</div>`;
     }).join('');
     const main = `<div class="main bus-main">
-      <div class="col nav-col">
-        <div class="panel nav-panel">
-          <div class="pt"><i></i><b>线路选择</b><em>${pages.length}条</em></div>
-          <div class="pc"><div class="pc-inner line-nav-inner">${nav}</div></div>
-        </div>
-      </div>
+      <div class="col col-nav">${mkPanel('线路选择', `<div class="line-nav-inner">${nav}</div>`, { em: `${pages.length}条`, flex: '1' })}</div>
       <div class="content-wrap"><div class="line-stage">${stage}</div></div>
     </div>`;
     return { main, ticker: buildTickerHtml(answer, sync) };
@@ -916,7 +936,7 @@ function buildHtml({ query, answer }) {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=1920,height=1080"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${title}</title>
 <style>${CSS}</style>
 </head>
