@@ -228,8 +228,7 @@ async function main(query) {
 if (require.main === module) {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.log('用法: node index.js <查询语句>');
-    console.log('示例: node index.js "分析以下跳闸信息：厂站名称：大珠山站..."');
+    console.log('用法: node index.js "<故障信息>"');
     process.exit(1);
   }
 

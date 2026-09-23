@@ -1,20 +1,4 @@
-/**
- * 黄岛-故障信息分析助手 - HTML 看板生成脚本 v6（监测大屏 · 1920×1080 一屏铺满）
- * ==========================================
- * 用途：
- *   1. 调用 chat API 获取故障分析原始返回（复用 index.js 的 callChat）
- *   2. 将 接口返回的原始 answer 一字不差地完整展示（不脱敏 / 不修改 / 不删减）
- *   3. 跳闸 / 接地 / 母线接地三套独立模板，**按输入识别出的类型只渲染对应的那一种**
- *   4. 跳闸/单线接地/母线多线三套独立模板，监测大屏：深藏青底、发光描边、标题分段面板
- *   5. 配色：深蓝电力主题（主色深蓝，仅低压相警示红），苹果简约设计
- *
- * 用法：
- *   node gen_fault_html.js "<完整故障信息>"     （或读取 query.txt）
- *   可选：FAULT_SEED_FILE=<文件> 直接复用已有接口档案离线重渲染（跳过接口调用）
- *
- * 输出：
- *   output/故障信息分析看板_类型_日期.html（FAULT_OUT_DIR 可覆盖）
- */
+/** 黄岛故障看板 v6：跳闸/接地/母线三套监测大屏（1920×1080，一标题一面板）。FAULT_SEED_FILE 可离线重渲染。 */
 const fs = require('fs');
 const path = require('path');
 const biz = require('./index.js'); // 复用 API 调用逻辑
@@ -68,18 +52,6 @@ function todayTime() {
 function todayCompact() {
   const d = new Date();
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
-}
-
-function fmtDay(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-/** 自然周（周一至周日） */
-function weekBounds(d) {
-  const mondayOffset = (d.getDay() + 6) % 7;
-  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - mondayOffset);
-  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
-  return { start, end, key: fmtDay(start) };
 }
 
 /**
@@ -148,15 +120,6 @@ function pairsToMap(pairs) {
   return map;
 }
 
-function parseOutageDate(row) {
-  const year = String(row['年度'] || '').match(/20\d{2}/);
-  const md = String(row['停电日期'] || '');
-  const m = md.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-  if (!year || !m) return null;
-  const d = new Date(Number(year[0]), Number(m[1]) - 1, Number(m[2]));
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 function isBlankCell(v) {
   return !String(v || '').trim() || /^(无|—|-|\/)$/.test(String(v).trim());
 }
@@ -183,39 +146,6 @@ function renderDataTable(headers, rows) {
   return `<div class="table-wrap"><table class="dt"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-/** 有停电日期的记录按自然周出范围标题，和本次日报分开 */
-function weekCaption(rows) {
-  const dates = rows.map(parseOutageDate).filter(Boolean);
-  if (!dates.length) return '';
-  const groups = new Map();
-  dates.forEach((d) => {
-    const w = weekBounds(d);
-    if (!groups.has(w.key)) groups.set(w.key, w);
-  });
-  const labels = [...groups.values()].map((w) => `${fmtDay(w.start)} ~ ${fmtDay(w.end)}`);
-  return `<div class="week-cap">周报区间 ${esc(labels.join('；'))} · ${dates.length} 起 · 自然周（周一至周日），不与本次日报混排</div>`;
-}
-
-// 按段名切分 query（跳闸 / 接地 / 母线接地）
-function parseQuerySections(query) {
-  const q = String(query || '');
-  const sections = [];
-  const parts = q.split(/^\s*(母线接地|接地|跳闸)\s*[：:]/m);
-  for (let i = 1; i < parts.length; i += 2) {
-    const type = parts[i];
-    const body = String(parts[i + 1] || '').trim();
-    if (body) sections.push({ type, text: body });
-  }
-  if (sections.length === 0 && q.trim()) {
-    let type = '跳闸';
-    if (/母线接地/.test(q)) type = '母线接地';
-    else if (/接地/.test(q)) type = '接地';
-    sections.push({ type, text: q.trim() });
-  }
-  return sections;
-}
-
-// 根据输入判定主故障类型（一个看板只对应一种类型的模板）
 function pickMain(query) {
   const q = String(query || '').trim();
   // 优先识别行首“跳闸：/接地：/母线接地：”段落头（避免正文里“跳闸前接地”等干扰）
@@ -248,12 +178,6 @@ function extractKV(text) {
     }
   }
   return kv;
-}
-
-// 从相别值里抽取单相标识（“C相”/“C”/“C相接地” → “C相”）
-function phaseLabel(s) {
-  const m = /([ABCabc])\s*相?/.exec(String(s || ''));
-  return m ? m[1].toUpperCase() + '相' : '?';
 }
 
 function numOf(v) {
@@ -312,7 +236,7 @@ function renderForestBars(lines) {
   if (!records.length) {
     const t = lines.map((l) => l.trim()).filter(Boolean);
     if (t.length === 1 && /^无$/.test(t[0])) return '<div class="empty">无</div>';
-    return t.length ? `<div class="narr">${esc(t.join('\\n'))}</div>` : '<div class="empty">无</div>';
+    return t.length ? `<div class="narr">${esc(t.join('\n'))}</div>` : '<div class="empty">无</div>';
   }
   const maxLen = Math.max(...records.map((r) => numOf(r['穿越长度kM'] || r['通道长度公里']) || 0.1), 0.5);
   return records.map((r) => {
@@ -344,7 +268,7 @@ function renderSectionBody(title, lines) {
   pure.forEach((l) => { const ps = parseFieldPairs(l); if (ps.length === 1) pairs.push(ps[0]); });
   if (pairs.length) return compactList(pairs);
   const tbl = renderRowTables(pure);
-  return tbl || `<div class="narr">${esc(pure.join('\\n'))}</div>`;
+  return tbl || `<div class="narr">${esc(pure.join('\n'))}</div>`;
 }
 
 function renderBlockBody(block) {
@@ -454,70 +378,6 @@ function collectDailyPanels(query, answer, mainType) {
   ];
 }
 
-// 按段名切分 query（跳闸 / 接地 / 母线接地）
-function parseQuerySections(query) {
-  const q = String(query || '');
-  const sections = [];
-  const parts = q.split(/^\s*(母线接地|接地|跳闸)\s*[：:]/m);
-  for (let i = 1; i < parts.length; i += 2) {
-    const type = parts[i];
-    const body = String(parts[i + 1] || '').trim();
-    if (body) sections.push({ type, text: body });
-  }
-  if (sections.length === 0 && q.trim()) {
-    let type = '跳闸';
-    if (/母线接地/.test(q)) type = '母线接地';
-    else if (/接地/.test(q)) type = '接地';
-    sections.push({ type, text: q.trim() });
-  }
-  return sections;
-}
-
-// 根据输入判定主故障类型（一个看板只对应一种类型的模板）
-function pickMain(query) {
-  const q = String(query || '').trim();
-  // 优先识别行首“跳闸：/接地：/母线接地：”段落头（避免正文里“跳闸前接地”等干扰）
-  const head = q.match(/^\s*(母线接地|接地|跳闸)\s*[：:]/m);
-  if (head) return head[1];
-  if (/母线接地/.test(q)) return '母线接地';
-  if (/接地/.test(q)) return '接地';
-  return '跳闸';
-}
-
-// 解析一段 kv（支持 “键：值” 与 “键：值  键2：值2” 多空行）
-function extractKV(text) {
-  const kv = {};
-  const lines = String(text || '').split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim().replace(/\u00a0/g, ' ');
-    if (!line) continue;
-    if (/^(母线接地|接地|跳闸)\s*[：:]?$/.test(line)) continue;
-    const m = line.match(/^([^：:：\t]{1,20})[：:]\s*(.+)$/);
-    if (m) {
-      const key = m[1].trim();
-      const val = m[2].trim();
-      if (key && !(key in kv)) kv[key] = val;
-      continue;
-    }
-    const parts = line.split(/ {2,}|\t+/).filter(Boolean);
-    for (const p of parts) {
-      const mm = p.match(/^([^：:：\t]{1,20})[：:]\s*(.+)$/);
-      if (mm) kv[mm[1].trim()] = mm[2].trim();
-    }
-  }
-  return kv;
-}
-
-// 从相别值里抽取单相标识（“C相”/“C”/“C相接地” → “C相”）
-function phaseLabel(s) {
-  const m = /([ABCabc])\s*相?/.exec(String(s || ''));
-  return m ? m[1].toUpperCase() + '相' : '?';
-}
-
-
-/**
- * 从 query / 接口返回收集候选线路名。
- */
 function collectCandidateLines(text, extraText, kv, opts) {
   const forceScan = !!(opts && opts.forceScan);
   const set = [];
@@ -595,12 +455,6 @@ function parseAnswerBlocks(answer) {
   return blocks;
 }
 
-// 解析 “键：值；键：值” 或中文逗号 / 双空格分隔字段（穿越林区 / 密集通道等区段行）
-function semicolonKV(line) {
-  return parseFieldPairs(line).filter(([, v]) => String(v || '').trim());
-}
-
-// 解析 Markdown 表格行（| a | b |），返回 { headers, rows }；非表格返回 null
 function parseMdTable(lines) {
   const tbl = lines.filter((l) => /^\|.*\|/.test(l.trim()));
   if (tbl.length < 2) return null;
@@ -657,10 +511,7 @@ function renderLineDetail(lines) {
         const maps = mapsFromMd(md);
         const blank = maps.every((r) => md.headers.every((h) => isBlankCell(r[h])));
         if (blank) parts.push(NONE);
-        else {
-          if (/故障/.test(s.title)) parts.push(weekCaption(maps));
-          parts.push(renderRecordCards(md.headers, maps));
-        }
+        else parts.push(renderRecordCards(md.headers, maps));
       } else {
         const records = [];
         const rest = [];
@@ -855,7 +706,6 @@ const CSS = `
   table.dt{width:100%;border-collapse:collapse;font-size:10.5px}
   table.dt th{background:rgba(0,229,255,.12);color:#fff;text-align:left;padding:4px 6px}
   table.dt td{padding:4px 6px;border-bottom:1px solid rgba(0,229,255,.1);word-break:break-word}
-  .week-cap{display:none}
 `;
 
 function buildHtml({ query, answer }) {
@@ -936,14 +786,8 @@ async function main() {
     }
   }
 
-  const typeSections = parseQuerySections(query);
-  let html;
-  if (answer && answer.trim().length > 0) {
-    html = buildHtml({ query, answer });
-  } else {
-    console.warn('[警告] 接口多次调用均未返回数据，仍将基于用户输入的故障信息生成看板。');
-    html = buildHtml({ query, answer: '' });
-  }
+  if (!answer.trim()) console.warn('[警告] 接口未返回数据，将仅基于用户输入生成看板。');
+  const html = buildHtml({ query, answer });
 
   const date = todayCompact();
   const mainType = pickMain(query);

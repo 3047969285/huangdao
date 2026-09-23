@@ -1,19 +1,4 @@
-/**
- * 黄岛-故障信息分析助手 · i国网「信息同步」推送脚本
- *
- * 功能：把接口返回的「信息同步」内容推送到个人手机端 i国网。
- * 流程（发送前先展示 → 用户修改 → 再发送）：
- *   1) 准备/展示: node send_iguowang.js "<完整故障信息>"   [--seed <档案文件>]
- *      - 调用 chat 接口取得 answer，提取「信息同步」段，保存到 runtime/push_msg.txt 并展示；
- *      - 不带参数时自动复用 runtime/query.txt；--seed 指定离线档案可跳过接口调用
- *   2) 用户按需修改 runtime/push_msg.txt
- *   3) 发送:      node send_iguowang.js --send [--userid <id>]
- *      - 读取 runtime/push_msg.txt，POST 到 i国网 SendMessage 接口
- *
- * userid 解析优先级：--userid 参数 > ~/.claude、~/.sgcode 下 CLAUDE.md/USER.md 中 [0-9A-F]{32}
- *                  > workspace 路径中的 32 位 id
- *                  > 报错提示手动指定
- */
+/** i国网信息同步：准备模式提取到 runtime/push_msg.txt，确认后 --send 推送。 */
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
