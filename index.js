@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// API 配置（硬编码按业务要求保留）
+// API 配置
 const API_HOST = '25.40.168.143';
 const API_PORT = 50008;
 const BEARER_TOKEN = process.env.CHAT_API_BEARER_TOKEN;
@@ -116,6 +116,12 @@ function readQueryFromFile() {
 
 // 调用 chat 接口（纯文本查询，不上传文件）
 async function callChat(query) {
+  if (!BEARER_TOKEN) {
+    const message = '缺少环境变量 CHAT_API_BEARER_TOKEN，无法调用 Chat 接口';
+    console.error(`[Chat接口失败] ${message}`);
+    return { url: null, answer: '', error: message };
+  }
+
   const url = `http://${API_HOST}:${API_PORT}/v1/chat-messages`;
 
   const payload = {
